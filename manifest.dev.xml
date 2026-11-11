@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Manifest>
+  <ID>watercalc_assistant</ID>
+  <Name>净水助手</Name>
+  <Author>dsh</Author>
+  <ModVersion>0.3.1</ModVersion>
+  <Description>净水助手（开发版：写 log.txt、ctl 探针可用）</Description>
+  <GameVersions>
+    <Version>0.46</Version>
+  </GameVersions>
+  <Prerequisites />
+  <Assemblies>
+    <Assembly>WaterCalcMod.dll</Assembly>
+  </Assemblies>
+  <!-- 仅本地 Mods 文件夹使用：开发版要写 log.txt / ctl 文件，并使用旧式按字符串反射做兜底。 -->
+  <Capabilities>
+    <Capability>files</Capability>
+    <Capability>reflection-external</Capability>
+  </Capabilities>
+</Manifest>

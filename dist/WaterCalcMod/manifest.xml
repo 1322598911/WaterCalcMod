@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Manifest>
+  <ID>watercalc_assistant</ID>
+  <Name>净水助手</Name>
+  <Author>dsh</Author>
+  <ModVersion>0.3.1</ModVersion>
+  <Description>净水助手</Description>
+  <GameVersions>
+    <Version>0.46</Version>
+  </GameVersions>
+  <Prerequisites />
+  <Assemblies>
+    <Assembly>WaterCalcMod.dll</Assembly>
+  </Assemblies>
+  <!-- 创意工坊发布版：不声明 files / reflection-external / network。
+       官方 APIChanges（2026-11-08）：声明任一受限能力的工坊模组自 2026-12-10 起必须开发者验证，
+       否则不加载；本地 Mods 文件夹不受限。
+       本版本全部游戏成员访问已改走官方 ModReflect（按类型名/成员名查游戏类型，不需要该能力），
+       残留的旧反射只在 DEV 构建里保留。发布前必须用不带 DEV 的构建（见 tools/build.ps1 或 tools/build.sh）。 -->
+  <Capabilities>
+  </Capabilities>
+</Manifest>
