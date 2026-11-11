@@ -1,0 +1,23 @@
+# 编译产物：源里不存 dll，只保留 lib 的 Harmony 与 dist 的成品
+*.dll
+!lib/0Harmony.dll
+!dist/**/*.dll
+obj/
+bin/
+*.pdb
+*.mdb
+*.log
+
+# 开发调试通道（DEV 构建用，路径由 WATERCALC_DEV_DIR 指定）
+ctl.txt
+ctl.out
+ctl.enable
+auto.enable
+
+# 个人编辑器/系统杂物
+.vs/
+.idea/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
