@@ -104,7 +104,7 @@ namespace WaterCalcMod
                 show = false;
             }
             catch (Exception e) { try { Logger.LogWarning("[cfg] 读设置失败 " + e.GetType().Name); } catch (Exception) { } }
-            try { Logger.LogInfo("净水助手 v0.3.1 已加载，F7 开关面板（F9 留给游戏开发菜单、F8 是游戏调试控制台）"); } catch (Exception) { }
+            try { Logger.LogInfo("净水助手 v1.0 已加载，F7 开关面板（F9 留给游戏开发菜单、F8 是游戏调试控制台）"); } catch (Exception) { }
             // GameBridge.Init 与各模块 Install 已由 ModEntry.Init 完成（原生 mod 的生命周期里先 Init 再 OnEnable）。
             // 这里再调一遍会给同一个游戏方法挂第二份 Harmony 补丁（日志里出现过两次「[ctx] 已挂」）。
             try
@@ -174,8 +174,18 @@ namespace WaterCalcMod
         }
 #endif
 
+        // 皮肤必须在 LateUpdate 补：EventSystem 的悬停/按下事件在 Update 里跑，
+        // 放在 Update 里补会晚一帧 → 玩家看到的就是「指上去闪白」。
+        private void LateUpdate()
+        {
+            try { PurifierUi.LateSkin(); } catch (Exception e) { Logger.LogWarning("[upd] late ERR " + e.GetType().Name + " " + e.Message); }
+        }
+
+        private bool entryAlive;
+
         private void Update()
         {
+            if (!entryAlive) { entryAlive = true; PurifierUi.TraceEntry("Plugin.Update alive"); }
 #if DEV
             updStage = 1;
             TryRestoreCash();
@@ -191,10 +201,17 @@ namespace WaterCalcMod
 #endif
             try
             {
-                if (Hotkey.Down())
+                bool panelHotkey = false;
+                try { panelHotkey = Hotkey.Down(); }
+                catch (Exception e) { Logger.LogWarning("[key] Hotkey.Down ERR " + e.GetType().Name + " " + e.Message); }
+                // 发布版兜底：游戏的 SuppressHotkeys 若被输入框卡住，F10 仍能打开主面板。
+                if (!panelHotkey) panelHotkey = UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.F10);
+                if (panelHotkey)
                 {
+                    PurifierUi.TraceEntry("F10 detected");
+                    Logger.LogWarning("[key] F10 -> ToggleMain");
                     PurifierUi.ToggleMain();
-                    Logger.LogInfo("[key] " + Hotkey.KeyName + " -> native panel");
+                    Logger.LogWarning("[key] F10 ToggleMain returned");
                 }
 #if DEV
                 updStage = 4;
@@ -433,7 +450,7 @@ namespace WaterCalcMod
         {
             if (!scanned) { scanned = true; hint = ScanSafe(); }
             var st = new GUIStyle(GUI.skin.window) { fontSize = 14 };
-            win = GUILayout.Window(889001, win, DrawWindow, "净水助手 v0.3.1（F9 关闭）", st);
+            win = GUILayout.Window(889001, win, DrawWindow, "净水助手 v1.0（F9 关闭）", st);
             // PanelBlocker.Sync(win, show);
         }
 

@@ -141,22 +141,14 @@ namespace WaterCalcMod
             catch (Exception) { }
         }
 
-        /// <summary>Postfix of CreateTooltip：把「一晚能不能到 99.00%」直接追加进游戏原版工具提示。</summary>
+        /// <summary>Postfix of CreateTooltip：**已停用** —— 玩家 2026-11-11 要求删掉物品标签上模组追加的那行，
+        /// 所以这里直接返回（保留方法签名，防止旧的 Harmony 挂载方式按名解析失败）。</summary>
         public static void OnTooltipPost(object[] __args)
         {
-            try
-            {
-                if (__args == null || __args.Length < 2 || __args[0] == null || __args[1] == null) return;
-                string line = TooltipLine(__args[1]);
-                log.LogInfo("[tip] 机器=" + GameBridge.NameOfItem(__args[1]) + " 配对=" + (PairOf(__args[1]) != null) +
-                            " 行=" + (line == null ? "null" : line));
-                if (string.IsNullOrEmpty(line)) return;
-                AppendLine(__args[0], line);
-            }
-            catch (Exception e) { log.LogWarning("[tip] 失败 " + e.GetType().Name + " " + e.Message); }
+            return;
         }
 
-        private static void AppendLine(object builderObj, string text)
+        private static void AppendLineUnused(object builderObj, string text)
         {
             var builder = builderObj as RichTextBuilder;
             if (builder == null) { log.LogWarning("[tip] 第 1 参不是 RichTextBuilder"); return; }
@@ -301,12 +293,39 @@ namespace WaterCalcMod
 
         private static Pair lastVisiblePair;
 
+        /// <summary>上一次打过 [pick] 日志的配对序号（玩家 2026-11-12：ApplyPair 每帧被轮询，日志刷屏）。</summary>
+        private static int lastPickLogIdx = -1;
+
         /// <summary>窗口是否正在显示（只读反射，开销很小）。</summary>
         public static bool WindowVisible(object win)
         {
             if (win == null) return false;
             try { return GameBridge.WinVisible(win); }
             catch (Exception) { return false; }
+        }
+
+        /// <summary>原生绿点是否仍选中：窗口可见只是前提，机器本身还必须 is_machinery_powered=true。</summary>
+        public static bool PairSelected(Pair p)
+        {
+            if (p == null || !WindowVisible(p.Window)) return false;
+            try
+            {
+                var m = p.Machine as GameItem;
+                if (m == null && p.BottleInv != null) m = MachineOf(p.BottleInv) as GameItem;
+                if (m != null) return MachineryHelper.IsMachineryToggleOn(m);
+            }
+            catch (Exception) { }
+            // 老存档若暂时还没配到机器物品，保留旧的“窗口可见即可选”行为，等配对补齐。
+            return true;
+        }
+
+        public static string SelectionSignature()
+        {
+            var sb = new System.Text.StringBuilder(Pairs.Count * 4 + 8);
+            for (int i = 0; i < Pairs.Count; i++)
+                sb.Append(i).Append(':').Append(PairSelected(Pairs[i]) ? '1' : '0').Append(';');
+            sb.Append("pick=").Append(PickedIndex);
+            return sb.ToString();
         }
 
         /// <summary>按「哪个窗口正显示着」来确定玩家打开的净水器（PixelWindow.IsVisible）。
@@ -355,7 +374,12 @@ namespace WaterCalcMod
             BottleInv = p.BottleInv;
             MachineWindow = p.Window;
             if (p.Machine != null) MachineItem = p.Machine;
-            if (log != null && idx >= 0) log.LogInfo("[pick] 按配对#" + idx + " 算 槽=" + (p.BottleInv != null ? "ok" : "null"));
+            // 玩家 2026-11-12：这行原来每秒刷几百条一样的（ApplyPair 被每帧轮询调用），只在配对序号变化时打一次。
+            if (log != null && idx >= 0 && idx != lastPickLogIdx)
+            {
+                lastPickLogIdx = idx;
+                log.LogInfo("[pick] 按配对#" + idx + " 算 槽=" + (p.BottleInv != null ? "ok" : "null"));
+            }
         }
 
         public static object CurrentBottle()

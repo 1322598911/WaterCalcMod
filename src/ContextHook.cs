@@ -33,8 +33,34 @@ namespace WaterCalcMod
 
                 var hm = new Harmony("dsh.watercalc.context");
                 hm.Patch(m,
-                    prefix: new HarmonyMethod(typeof(ContextHook).GetMethod("Prefix", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)),
-                    postfix: new HarmonyMethod(typeof(ContextHook).GetMethod("Postfix", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)));
+                    prefix: new HarmonyMethod(typeof(ContextHook), "Prefix"),
+                    postfix: new HarmonyMethod(typeof(ContextHook), "Postfix"));
+
+                var uc = GameBridge.Target("ItemContextHandler", "UpdateConditions", Type.EmptyTypes);
+                if (uc == null)
+                {
+                    log.LogWarning("[ctx] 找不到 ItemContextHandler.UpdateConditions，右键读取行不会出现");
+                }
+                else
+                {
+                    hm.Patch(uc, postfix: new HarmonyMethod(typeof(ContextHook), "UpdatePostfix"));
+                    log.LogInfo("[ctx] 已挂 ItemContextHandler.UpdateConditions（追加/隐藏读取行）");
+                }
+
+                // 原生菜单的悬停/选中着色只走 UpdateSortSelectButtonColor；
+                // 只追加行不挂这个 Postfix，鼠标指到「读取」时就不会有原生按钮的选中效果。
+                var sc = GameBridge.Target("ItemContextHandler", "UpdateSortSelectButtonColor",
+                                           new Type[] { typeof(RichTextElement) });
+                if (sc == null)
+                {
+                    log.LogWarning("[ctx] 找不到 ItemContextHandler.UpdateSortSelectButtonColor，读取行无悬停色");
+                }
+                else
+                {
+                    hm.Patch(sc, postfix: new HarmonyMethod(typeof(ContextHook), "ColorPostfix"));
+                    log.LogInfo("[ctx] 已挂 ItemContextHandler.UpdateSortSelectButtonColor（读取行悬停色）");
+                }
+
                 installed = true;
                 log.LogInfo("[ctx] 已挂 ItemContextHandler.TriggerButton（prefix 接管 + postfix 记录）");
             }
@@ -47,6 +73,16 @@ namespace WaterCalcMod
             if (!installed || __instance == null) return true;
             try
             {
+                // 批次 35：先认原生菜单里追加的「读取水质」行；命中后不进入原使用/排序逻辑。
+                if (ContextReadRow.IsOursOrMarked(button))
+                {
+                    object readItem = GameBridge.Get(__instance, "currentItem");
+                    string readMsg = PurifierUi.ReadBottleToCalc(readItem);
+                    GameBridge.Call(__instance, "Stop");
+                    log.LogInfo("[ctx] 右键读取水质 " + readMsg);
+                    return false;
+                }
+
                 object use = GameBridge.Get(__instance, "buttonUse");
                 if (use == null) return true;
                 if (!ReferenceEquals(use, button)) return true;                      // 不是「使用」
@@ -58,6 +94,7 @@ namespace WaterCalcMod
                 if (!HasVisiblePurifier()) return true;                              // 没开净水器，保持原行为
 
                 PurifierUi.RightClickTarget = item;
+                PurifierUi.NoteBottlePick(item);
                 string msg;
                 try { msg = PurifierUi.OnFillPublic(); }
                 finally { PurifierUi.RightClickTarget = null; }
@@ -108,6 +145,71 @@ namespace WaterCalcMod
                     log.LogInfo("[ctx] btn=" + which + " item=" + id + " inv=" + (inv != null));
             }
             catch (Exception e) { log.LogWarning("[ctx] postfix " + e.Message); }
+        }
+
+        /// <summary>原生菜单鼠标移动到某一行时，同步刷新「读取」行的文字颜色，保留原生选中效果。</summary>
+        public static void ColorPostfix(RichTextElement __0,
+                                        PixelWindow ___contextWindow,
+                                        RenderHandler.ColorPalette ___textColor,
+                                        RenderHandler.ColorPalette ___textSelectColor)
+        {
+            if (!installed) return;
+            try
+            {
+                ContextReadRow.Color(___contextWindow, __0, ___textColor, ___textSelectColor, "读取");
+            }
+            catch (Exception e)
+            {
+                if (log != null) log.LogWarning("[ctx] 读取行悬停色异常 " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 批次 35：原生右键菜单每次刷新时，在菜单 GridPixelElement 末尾追加/隐藏「读取」。
+        /// 空瓶、非液体容器、没有菜单窗口时只隐藏旧行，不新增。
+        /// </summary>
+        public static void UpdatePostfix(GameItem ___currentItem,
+                                          RichTextElement ___buttonOpen,
+                                          RichTextElement ___buttonUnload,
+                                          RichTextElement ___buttonPin,
+                                          PixelWindow ___contextWindow,
+                                          RenderHandler.ColorPalette ___textColor)
+        {
+            if (!installed) return;
+            try
+            {
+                if (___currentItem == null)
+                {
+                    ContextReadRow.Hide(___contextWindow);
+                    return;
+                }
+
+                long cap = 0, vol = 0;
+                try
+                {
+                    cap = WaterHelper.GetTotalCapacity(___currentItem);
+                    vol = WaterHelper.GetTotalVolume(___currentItem);
+                }
+                catch (Exception e)
+                {
+                    if (log != null) log.LogWarning("[ctx] 读取右键瓶子失败 " + e.Message);
+                    ContextReadRow.Hide(___contextWindow);
+                    return;
+                }
+
+                if (cap <= 0 || vol <= 0)
+                {
+                    ContextReadRow.Hide(___contextWindow);
+                    return;
+                }
+
+                RichTextElement sample = ___buttonOpen ?? ___buttonUnload ?? ___buttonPin;
+                ContextReadRow.Add(___contextWindow, sample, ___textColor, "读取");
+            }
+            catch (Exception e)
+            {
+                if (log != null) log.LogWarning("[ctx] 读取水质行异常 " + e.Message);
+            }
         }
 
 #if DEV

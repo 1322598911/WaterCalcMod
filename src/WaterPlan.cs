@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -39,12 +39,38 @@ namespace WaterCalcMod
         }
         /// <summary>海德拉整只的价值（耐久 330 点）：按过滤棉同口径折成每点 ≈0.0758，仅用于「每升」比较。</summary>
         public const int HydraCost = 325;   // 玩家实测：整只 325 元 / 300 耐久
-        /// <summary>电：1 能量 = 1 元。每晚耗多少能量从**机器标签**读
-        /// （MachineryHelper.GetMachinePowerUsage）；0 效率加成时 4/晚，效率为负会更贵。
+        /// <summary>每晚耗多少度电，从**机器标签**读
+        /// （MachineryHelper.GetMachinePowerUsage）；0 效率加成时 4 度/晚，效率为负会更多。
         /// 这是 static 而不是 const：每台机器的能耗可能不同，由 PurifierUi.Bonuses 写入。</summary>
         public static int EnergyPerNight = 4;
 
-        public const int MaxTablets = 3;
+        /// <summary>电费单价：玩家 2026-11-11 定案 **1 晚 = 1.5 元**。
+        /// 标准机器 4 度/晚 ⇒ 0.375 元/度；效率为负时耗电变多，电费按度数同比上涨。
+        /// 成本里所有「电」都用它折算，面板仍显示机器真实度数。</summary>
+        public const double EnergyPricePerDeg = 0.375;
+
+        /// <summary>一晚电费（元）：标准 4 度机 = 1.5 元。成本行/文案统一走这里。</summary>
+        public static double EnergyCostPerNight
+        {
+            get { return EnergyPerNight * EnergyPricePerDeg; }
+        }
+
+        /// <summary>药片建议上限。玩家 2026-11-11 定案：游戏里药片没有「一次最多 3 片」的硬限制
+        /// （V3.6 计算器 47.75 L 方案也给到 5 片），旧值 3 让 44 L 容器只能推荐到 29,438 mL；
+        /// 改成 6 后，44 L 容器能给出 32,169 mL（性能 0）/ 35,465 mL（性能 25）的一晚方案。
+        /// 真实持有药片时仍按持有数收紧（见 BuildCombos 的 maxTab）；性价比档只用成本排序，不会白吃。</summary>
+        public const int MaxTablets = 6;
+
+        /// <summary>本次规划允许考虑的药片数：无限道具（-1）＝硬上限；真实持有 N 片就最多 N 片。
+        /// 玩家 2026-11-11：药片没有「一次最多 3 片」的硬限制，但不能推荐比身上还多的片数。</summary>
+        // 玩家 2026-11-13（第七轮）：设置页「可用设备」——关掉的设备不参与方案。
+        public static bool AllowFilter = true, AllowUv = true, AllowTablets = true, AllowHydra = true, AllowMachine = true;
+
+        public static int TabletCap(int ownTablets)
+        {
+            if (ownTablets < 0) return MaxTablets;
+            return ownTablets > MaxTablets ? MaxTablets : ownTablets;
+        }
         /// <summary>「时间也是成本」的旧折算值：已停用（保留常量只为不破坏旧引用）。
         /// 玩家 2026-11-11 定案：一晚只值 4 块电费，两片药 12 块 —— 再给一晚加 15 的「时间折价」，
         /// 会让 6 元一片的药片永远打赢「多跑一晚」，所以排序只用真实耗材成本。</summary>
@@ -62,7 +88,7 @@ namespace WaterCalcMod
         public static int NightCap = 1;
 
         /// <summary>海德拉开关（玩家 2026-11-10 要求做成设置项）：
-        /// 0＝自动（只有不用它就到不了目标时才参战）· 1＝强制可用（装得下就用它装满）· 2＝完全不用。</summary>
+        /// 0＝自动（只有不用它就到不了目标时才参战）   1＝强制可用（装得下就用它装满）   2＝完全不用。</summary>
         public static int HydraMode = 0;
         /// <summary>最多肯花多少海德拉耐久（1 点 = 100 mL）。0 / ≥330 视为不限；默认 300。</summary>
         public static int HydraDuraCap = 300;
@@ -71,13 +97,18 @@ namespace WaterCalcMod
         /// 没拖过就按背包里真实剩的耐久来算，避免默认 300 把只持有 100 的玩家推荐成 300。</summary>
         public static bool HydraDurUserSet = false;
 
-        /// <summary>这一趟海德拉真正允许用多少耐久。无限口径不按耐久卡；拖过滑条以滑条为准。</summary>
+        /// <summary>这一趟海德拉真正允许用多少耐久。无限口径不按耐久卡；拖过滑条以滑条为准（0 = 不限）。</summary>
         public static long HydraAllowance(long hiCap, int ownHydraDur)
         {
-            if (ownHydraDur == -1)                                   // 无限道具：装得下多少就吃多少
+            // 无限道具：装得下多少就吃多少
+            if (ownHydraDur == -1)
                 return hiCap > 0 ? hiCap / WaterMath.HYDRA_UL_PER_DUR + 1 : (long)WaterMath.HYDRA_MAX_DUR;
-            if (HydraDurUserSet)                                    // 玩家亲手拖过：以滑条为准（0 = 不限）
-                return HydraDuraCap > 0 ? HydraDuraCap : (long)WaterMath.HYDRA_MAX_DUR;
+            // 玩家 2026-11-11 修：滑条拖到「不限」（0）必须**和「无限道具」同一口径**——
+            // 以前这里返回 HYDRA_MAX_DUR(300)，把 50000 mL 容器硬卡在 30000，玩家反馈「拉条的无限对方案无效」。
+            if (HydraDurUserSet && HydraDuraCap <= 0)
+                return hiCap > 0 ? hiCap / WaterMath.HYDRA_UL_PER_DUR + 1 : (long)WaterMath.HYDRA_MAX_DUR;
+            if (HydraDurUserSet)                                    // 玩家亲手拖过：以滑条为准
+                return HydraDuraCap;
             if (ownHydraDur > 0)                                    // 没拖过：背包真实耐久就是上限
                 return HydraDuraCap > 0 ? Math.Min(ownHydraDur, HydraDuraCap) : ownHydraDur;
             return HydraDuraCap > 0 ? HydraDuraCap : (long)WaterMath.HYDRA_MAX_DUR;
@@ -96,6 +127,31 @@ namespace WaterCalcMod
             // 两位小数（杂质等小量）
             if (ul % 1000 == 0) return (ul / 1000).ToString(CultureInfo.InvariantCulture);
             return (ul / 1000.0).ToString("0.00", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>方案短名：主页步骤行 / 更多方案表共用同一套压缩规则，
+        /// 别再各写一串 Replace——表里之前显示的仍是「只放…（过夜后放）」的长名。
+        /// 例：海德拉(200耐久)+过滤+紫外+2片药片（过夜后放） → 「海德拉200  滤棉  紫外  药2」</summary>
+        public static string ShortLabel(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return "";
+            string s = label.Replace("（过夜后放）", "").Replace("（过滤棉）", "").Replace("（紫外灯）", "")
+                        .Replace("什么都不放", "无前置").Replace("只放", "");
+            // 海德拉耐久可能是任意点数（60/120/311…），不能只替换 200/300 两档，
+            // 否则方案表左列会显示「海德拉(60耐久) …」被截成省略号。
+            int hd = s.IndexOf("海德拉(", StringComparison.Ordinal);
+            if (hd >= 0)
+            {
+                int close = s.IndexOf("耐久)", hd, StringComparison.Ordinal);
+                if (close > hd)
+                {
+                    string n = s.Substring(hd + 4, close - (hd + 4));
+                    s = s.Substring(0, hd) + "海" + n + s.Substring(close + 3);
+                }
+            }
+            return s.Replace("海德拉(200耐久)", "海德拉200").Replace("海德拉(300耐久)", "海德拉300")
+                        .Replace("片药片", "药").Replace("过滤棉", "滤棉")
+                        .Replace(" + ", "  ").Replace("+", "  ").Trim();   // 分隔用双空格，不用「 」
         }
 
         /// <summary>整毫升（四舍五入）：玩家要倒出/保留多少，报「42783 mL」而不是「42782.6 mL」。</summary>
@@ -121,6 +177,14 @@ namespace WaterCalcMod
         // ---------------- B. 容器扫描 / 整瓶拆解 ----------------
 
         public class Cup { public string name; public long capUl; }
+        public class WaterBottle
+        {
+            public GameItem item;
+            public string name;
+            public long capUl;
+            public long volUl;
+            public int purityBp;
+        }
         public class CupGroup { public string name; public long capUl; public int n; }
         public class NightRow { public int n; public long volUl; public int purityBp; }
         public class Step { public string title; public string detail; }
@@ -151,6 +215,56 @@ namespace WaterCalcMod
             catch (Exception) { }
             if (scanSession > 0) scanMemo = res;
             return res;
+        }
+
+        /// <summary>背包 / 台面 / 机器里所有「有水」的容器。混水方案从这里取所有水质，
+        /// 不再只读当前一个瓶子（玩家 2026-11-13：不同水质放一起容器会变化）。</summary>
+        public static List<WaterBottle> ScanWaters()
+        {
+            var res = new List<WaterBottle>();
+            var seen = new List<GameItem>();
+            AddWaters(res, seen, GameBridge.AllItemsDeep());
+            AddWaters(res, seen, GameBridge.CounterItems());
+            try
+            {
+                for (int i = 0; i < PurifierHook.Pairs.Count; i++)
+                {
+                    var inv = PurifierHook.Pairs[i].BottleInv;
+                    if (inv == null) continue;
+                    AddWaters(res, seen, GameBridge.ItemsOf(inv));
+                }
+            }
+            catch (Exception) { }
+            return res;
+        }
+
+        private static void AddWaters(List<WaterBottle> res, List<GameItem> seen, List<GameItem> items)
+        {
+            if (items == null) return;
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                if (it == null) continue;
+                bool dup = false;
+                for (int k = 0; k < seen.Count; k++) if (ReferenceEquals(seen[k], it)) { dup = true; break; }
+                if (dup) continue;
+                seen.Add(it);
+                long capUl = 0, volUl = 0;
+                int pur = 0;
+                try { capUl = WaterHelper.GetTotalCapacity(it); } catch (Exception) { }
+                if (capUl <= 0) continue;
+                // 3L 过滤棉容器不当混水容器
+                if (Math.Abs(capUl - 3000000) <= 1) continue;
+                try { volUl = WaterHelper.GetTotalVolume(it); } catch (Exception) { }
+                if (volUl <= 0) continue;
+                try { pur = WaterHelper.GetWaterPurity(it); } catch (Exception) { }
+                if (pur <= 0) continue;
+                string nm = GameBridge.NameOfItem(it);
+                if (string.IsNullOrEmpty(nm)) nm = "水瓶";
+                var w = new WaterBottle();
+                w.item = it; w.name = nm; w.capUl = capUl; w.volUl = volUl; w.purityBp = pur;
+                res.Add(w);
+            }
         }
 
         private static void AddCups(List<Cup> res, List<GameItem> seen, List<GameItem> items)
@@ -254,7 +368,7 @@ namespace WaterCalcMod
                 for (int i = 0; i < groups.Count; i++)
                 {
                     if (take[i] <= 0) continue;
-                    if (sb.Length > 0) sb.Append(" · ");
+                    if (sb.Length > 0) sb.Append("  ");
                     sb.Append(groups[i].name).Append(" × ").Append(take[i]).
                        Append(" = ").Append(Ml((long)take[i] * groups[i].capUl)).Append(" mL");
                 }
@@ -366,6 +480,8 @@ namespace WaterCalcMod
             public int mode;
             /// <summary>前置/后置筛完没有可行方案时置 true（界面提示用），此时 pick 退回全量里挑。</summary>
             public bool filterEmpty;
+        /// <summary>性价比档整池都不可行、只能让海德拉回来时置 true；界面据此标注“仅此方案需海德拉”。</summary>
+        public bool needHydra;
             public List<NightRow> nights = new List<NightRow>();
             public int tablets, filterUsed, uvUsed, nightsCount, machineCnt;
             public long outUl, contamInUl, contamOutUl, budgetUl;
@@ -428,7 +544,7 @@ namespace WaterCalcMod
             public string CardFeedValue()
             {
                 // 玩家要分清「实际能接进去的量」和「理论上限」：整瓶凑不满时两个数不一样。
-                // 玩家 2026-11-11：不要再用「·」当分隔，改成空格；毫升一个颜色、标签一个颜色。
+                // 玩家 2026-11-11：不要再用「  」当分隔，改成空格；毫升一个颜色、标签一个颜色。
                 string s = PlanText.Lbl("实际可接 ") + PlanText.Rich(PlanText.C_NUM, PlanText.Ml(ChosenFeedUl()));
                 long cap = ShownUl();
                 if (cap > ChosenFeedUl())
@@ -456,12 +572,13 @@ namespace WaterCalcMod
                     {
                         double perL = c / (outUl2 / 1000000.0);
                         s += "    " + PlanText.Lbl("每升 ")
-                           + PlanText.Rich(PlanText.C_MONEY, perL.ToString("0.00", CultureInfo.InvariantCulture) + " 元");
+                           + PlanText.Rich(PlanText.C_MONEY, PlanText.PerL(perL) + " 元");
                     }
                 }
                 catch (Exception) { }
-                // 玩家 2026-11-11：目标设「纯水」但本机质量只到 99.01% 时，主界面也要说清楚。
-                if (capShort) s += "    " + PlanText.Rich(PlanText.C_WARN, "本机上限 " + PlanText.Pct(WaterMath.CapOf(q)) + "，到不了 " + PlanText.Pct(targetBp));
+                // 玩家 2026-11-13：这句会把「出来 …」整行顶到换行，主界面不再挂在这里；
+                // 目标超过本机上限时由主界面单独用一行短提示（见 BindModel 的 capShort 分支）。
+                if (needHydra) s += "    " + PlanText.Lbl("（仅此方案需海德拉）");
                 return s;
             }
 
@@ -511,13 +628,13 @@ namespace WaterCalcMod
                 {
                     var w = water0 != null ? water0.Clone() : WaterMath.Build(pick.feedUl, srcBp, CapOf(this, pick.feedUl));
                     if (pick.hydra) WaterMath.Hydra(w);
+                    if (WaterMath.TabletsFirst && pick.tablets > 0) WaterMath.Tablet(w, pick.tablets);
                     if (pick.filter) WaterMath.Filter(w, FilterDur);
                     if (pick.uv) WaterMath.Uv(w, Math.Max(1, (int)Math.Ceiling(pick.feedUl / 3000000.0)));
-                    int nn = pick.nights > 0 ? pick.nights : 1;
+                    int nn = pick.nights;
                     for (int i = 0; i < nn; i++) WaterMath.Purify(w, perf, q);
-                    if (pick.tablets > 0) WaterMath.Tablet(w, pick.tablets);
-                    return w;
-                }
+                    if (!WaterMath.TabletsFirst && pick.tablets > 0) WaterMath.Tablet(w, pick.tablets);
+                    return w;                }
                 catch (Exception) { return null; }
             }
 
@@ -529,9 +646,11 @@ namespace WaterCalcMod
                 {
                     var w = water0 != null ? water0.Clone() : WaterMath.Build(pick.feedUl, srcBp, CapOf(this, pick.feedUl));
                     if (pick.hydra) WaterMath.Hydra(w);
+                    // 药片在前时，药片已经先结算；这里算“药片之后、过滤/过夜之后”的水，用于判断药片还能不能清。
+                    if (WaterMath.TabletsFirst && pick.tablets > 0) WaterMath.Tablet(w, pick.tablets);
                     if (pick.filter) WaterMath.Filter(w, FilterDur);
                     if (pick.uv) WaterMath.Uv(w, Math.Max(1, (int)Math.Ceiling(pick.feedUl / 3000000.0)));
-                    int nn = pick.nights > 0 ? pick.nights : 1;
+                    int nn = pick.nights;
                     for (int i = 0; i < nn; i++) WaterMath.Purify(w, perf, q);
                     return w;
                 }
@@ -576,7 +695,7 @@ namespace WaterCalcMod
                 var sb = new StringBuilder();
                 sb.Append("水 ").Append(PlanText.Pct((int)waterBp));
                 for (int i = 0; i < keys.Length; i++)
-                    sb.Append(" · ").Append(names[i]).Append(' ').Append(PlanText.Pct((int)bp[i]));
+                    sb.Append("  ").Append(names[i]).Append(' ').Append(PlanText.Pct((int)bp[i]));
                 return sb.ToString();
             }
 
@@ -590,12 +709,12 @@ namespace WaterCalcMod
                 var sb = new StringBuilder();
                 sb.Append("水 ").Append(Ml2(w.WaterPart));
                 for (int i = 0; i < keys.Length; i++)
-                    sb.Append(" · ").Append(names[i]).Append(' ').Append(Ml2(w.Part(keys[i])));
+                    sb.Append("  ").Append(names[i]).Append(' ').Append(Ml2(w.Part(keys[i])));
                 sb.Append("（mL）");
                 return sb.ToString();
             }
 
-            /// <summary>方案表一行：标签 · 接 X · 出 Y · 纯度 · 耗材（药片/过滤棉/紫外）· 每升成本。
+            /// <summary>方案表一行：标签  接 X  出 Y  纯度  耗材（药片/过滤棉/紫外）   每升成本。
             /// 单位写在表头，行里只留数字，避免一行太长被面板宽度折成四行。</summary>
             public string ComboRow(Combo c, bool selected)
             {
@@ -616,16 +735,15 @@ namespace WaterCalcMod
             {
                 var sb = new StringBuilder();
                 if (selected) sb.Append("▶ ");
-                // 标签压到最短：去掉「（过夜后放）」和「什么都不放 + 」，只留「无前置·药片1」这种能一眼认出的写法
-                string lb = c.label.Replace("（过夜后放）", "").Replace("什么都不放", "无前置").Replace(" + ", "·")
-                                    .Replace("只放过滤棉", "滤棉").Replace("只放紫外", "紫外");
-                // 紧凑单行：像素字体不等宽，补空格对不齐，所以用「·」分隔，避免折行
-                sb.Append(lb).Append(" · ").Append(Ml(c.feedUl)).Append('→').Append(Ml(c.outUl));
+                string lb = WaterPlan.ShortLabel(c.label);
+                // 玩家 2026-11-13：方案表只显示**实际出水**，不再把「容器装了多少（20000）」也塞进来；
+                // 接水量在主界面卡一/「需接水」里看，表里一行越短越不折行。
+                sb.Append(lb).Append("  ").Append(Ml(c.outUl));
                 if (c.ok && !string.IsNullOrEmpty(c.badge)) sb.Append(" [").Append(c.badge).Append(']');
                 return sb.ToString();
             }
 
-            /// <summary>方案表第二行文字：纯度 · 耗材 · 本钱 · 卖价 · 净赚。用空格分隔、不写「·」，
+            /// <summary>方案表第二行文字：纯度  耗材  本钱  卖价  净赚。用空格分隔、不写「  」，
             /// 免得面板宽度不够时在分隔符处被折成第三行。</summary>
             public string ComboRowSub(Combo c)
             {
@@ -637,13 +755,14 @@ namespace WaterCalcMod
                 if (c.hydra) cons += (cons.Length > 0 ? "+" : "") + "海德拉";
                 // 玩家：紫外灯是**工具**，不是耗材，所以不计进「耗材」也不计价。
                 sb.Append(' ').Append(cons.Length > 0 ? cons : "无耗材");
-                // 玩家 2026-11-11：这一行只留「本钱 · 卖多少 · 赚多少」；每升成本在卡二和详情页，
+                // 玩家 2026-11-11：这一行只留「本钱  卖多少  赚多少」；每升成本在卡二和详情页，
                 // 一行塞太多会被面板宽度折成第三行。
                 double rev = WaterEconomy.Revenue(c.outUl, c.purityBp);
                 sb.Append(" 本 ").Append(c.cost.ToString("0.0", CultureInfo.InvariantCulture))
                   .Append(" 卖 ").Append(WaterEconomy.Money(rev))
                   .Append(" 赚 ").Append(WaterEconomy.Money(rev - c.cost));
-                if (c.uv) sb.Append("（紫外灯·工具）");
+                // 玩家：紫外灯是工具，不是耗材，不计价；但上一版在行尾加「（紫外灯 工具）」
+                // 等于把工具说明又塞回步骤/方案里，玩家嫌吵 —— 直接不显示，紫外灯存在就默认带上。
                 return sb.ToString();
             }
 
@@ -703,7 +822,7 @@ namespace WaterCalcMod
                 if (!ok) return "今日水质一晚做不到 " + PlanText.Pct(targetBp);
                 // 必须跟选中方案走：此前这里写死 ShownUl()/outUl（自动方案），
                 // 玩家选了「过滤+紫外+1片药」后卡一还是「2000→1850」，与方案表的 2000→1904 打架。
-                return "建议接水（" + bottleName + "）" + (ChosenFeedUl() / 1000) + " mL → 出 " + (ChosenOutUl() / 1000) + " mL · " + PlanText.Pct(ChosenOutBp());
+                return "建议接水（" + bottleName + "）" + (ChosenFeedUl() / 1000) + " mL → 出 " + (ChosenOutUl() / 1000) + " mL  " + PlanText.Pct(ChosenOutBp());
             }
 
             public string ImpurityText()
@@ -719,21 +838,23 @@ namespace WaterCalcMod
                 int showUv = pick != null ? (pick.uv ? 1 : 0) : uvUsed;
                 var sb = new StringBuilder();
                 sb.Append("这一轮花掉的耗材：药片 ").Append(showTablets).Append(" 片");
-                if (showFilter > 0) sb.Append(" · 过滤棉 ").Append(showFilter).Append(" 点耐久（400 点里扣）");
-                else sb.Append(" · 没用到过滤棉");
+                if (showFilter > 0) sb.Append("  过滤棉 ").Append(showFilter).Append(" 点耐久（400 点里扣）");
+                else sb.Append("  没用到过滤棉");
                 // 玩家：紫外灯是工具（不放耗材、无次数），只注明有没有用。
-                if (showUv > 0) sb.Append(" · 用了紫外灯（工具，不消耗）");
-                sb.Append(" · 电 ").Append(EnergyPerNight).Append(" 度");
-                sb.Append(" · 价值 ").Append(cost.ToString("0.00", CultureInfo.InvariantCulture)).
-                   Append(" · 每升 ").Append(perL.ToString("0.00", CultureInfo.InvariantCulture));
+                if (showUv > 0) sb.Append("  用了紫外灯（工具，不消耗）");
+                // 玩家 2026-11-11 定案：电费 1.5 元/晚（标准 4 度机），所以度数与钱都写出来。
+                sb.Append("  电 ").Append(EnergyPerNight).Append(" 度 ≈ ")
+                  .Append(EnergyCostPerNight.ToString("0.##", CultureInfo.InvariantCulture)).Append(" 元");
+                sb.Append("  价值 ").Append(cost.ToString("0.00", CultureInfo.InvariantCulture)).
+                   Append("  每升 ").Append(PlanText.PerL(perL));
                 // 玩家 2026-11-11：还要算「这一锅卖多少、净赚多少」。
                 try
                 {
                     double rev = ChosenRevenue();
                     if (rev > 0)
-                        sb.Append(" · 卖 ").Append(WaterEconomy.Money(rev))
+                        sb.Append("  卖 ").Append(WaterEconomy.Money(rev))
                           .Append(" 元（").Append(WaterEconomy.TierName(ChosenOutBp()))
-                          .Append(" · 赚 ").Append(WaterEconomy.Money(ChosenProfit())).Append(" 元）");
+                          .Append("  赚 ").Append(WaterEconomy.Money(ChosenProfit())).Append(" 元）");
                 }
                 catch (Exception) { }
                 return sb.ToString();
@@ -792,12 +913,140 @@ namespace WaterCalcMod
             }
         }
 
+        /// <summary>
+        /// 玩家 2026-11-13：「不用净水器」的存档也要有方案 —— 没有机器就没有性能/质量加成、没有过夜，
+        /// 只能靠 过滤棉 → 紫外灯 → 药片。这里单独构造一条（不走 MaxKeepUl，否则 perf=0 直接判死、
+        /// 方案表空、切方案也没反应）。
+        /// </summary>
+        private static Report BuildNoMachine(long capUl, int srcBp, int perf, int q, int targetBp,
+                                             string srcName, string bottleName, int mode,
+                                             int pre, int post, int ownTablets, bool ownFilter, bool ownUv)
+        {
+            // 自动（pre=0）必须保持网页老顺序，不能被上一次“药片在前”的静态状态污染。
+            WaterMath.TabletsFirst = pre >= 5;
+            ownFilter = ownFilter && AllowFilter;
+            ownUv = ownUv && AllowUv;
+            if (!AllowTablets) ownTablets = 0;
+            var r = new Report();
+            r.capUl = capUl; r.srcBp = srcBp; r.perf = 0; r.q = 0;
+            r.targetBp = targetBp;
+            int cap = WaterMath.CapOf(0);
+            r.effTargetBp = targetBp > cap ? cap : targetBp;
+            r.capShort = targetBp > cap;
+            r.srcName = srcName; r.bottleName = bottleName;
+            r.machineCnt = 0; r.mode = mode;
+            if (capUl <= 0) return r;
+
+            r.bestUl = capUl; r.useUl = capUl; r.leftUl = 0; r.needUl = capUl;
+            r.pour = Plan(capUl);
+
+            int filterDur = 0;
+            if (ownFilter) filterDur = FilterDur > 0 ? FilterDur : FilterDurPer;
+            int tabMax = TabletCap(ownTablets);
+            if (tabMax < 0) tabMax = 0;
+
+            Combo best = null;
+            double bestScore = double.MaxValue;
+            for (int f = 0; f < 2; f++)
+            {
+                if (f == 1 && filterDur <= 0) continue;
+                for (int u = 0; u < 2; u++)
+                {
+                    if (u == 1 && !ownUv) continue;
+                    // 玩家 2026-11-13：不用机器也要尊重前置/后置。
+                    // 前置：1 不处理 / 2 只要过滤 / 3 只要紫外 / 4 过滤+紫外 / 0 自动。
+                    if (pre == 1 && (f == 1 || u == 1)) continue;
+                    if (pre == 2 && !(f == 1 && u == 0)) continue;
+                    if (pre == 3 && !(f == 0 && u == 1)) continue;
+                    if (pre == 4 && !(f == 1 && u == 1)) continue;
+                    for (int t = 0; t <= tabMax; t++)
+                    {
+                        // 前置带药片的组合（玩家 2026-11-13 第七轮）
+                        if (pre == 5 && !(t >= 1 && f == 0 && u == 0)) continue;
+                        if (pre == 6 && !(t >= 1 && f == 0 && u == 1)) continue;
+                        if (pre == 7 && !(t >= 1 && f == 1 && u == 1)) continue;
+                        if (pre == 8 && !(t >= 1 && f == 1 && u == 0)) continue;
+                        // 后置：1 不放药片 / 2..4 固定 1..3 片 / 0 自动。
+                        if (post == 1 && t != 0) continue;
+                        if (post >= 2 && t != post - 1) continue;
+                        var w = WaterMath.Build(capUl, srcBp, capUl);
+                        // 前置带药片（5-8）时药片先下，再过滤/紫外；其余前置维持老顺序。
+                        bool tabFirst = pre >= 5;
+                        if (tabFirst && t > 0) WaterMath.Tablet(w, t, cap);
+                        int used = f == 1 ? WaterMath.Filter(w, filterDur) : 0;
+                        if (u == 1) WaterMath.Uv(w, 1);
+                        if (!tabFirst && t > 0) WaterMath.Tablet(w, t, cap);
+                        int bp = w.Purity;
+                        bool ok = bp >= r.effTargetBp;
+                        double cst = t * TabletCost + (f == 1 ? (used / (double)FilterDurPer) * FilterCost : 0);
+                        var c = new Combo();
+                        c.filter = (f == 1); c.uv = (u == 1); c.tablets = t;
+                        c.feedUl = capUl; c.outUl = w.v; c.filterUsed = used;
+                        c.purityBp = bp; c.cost = cst; c.ok = ok; c.nights = 0;
+                        c.hydra = false; c.hydraDur = 0;
+                        c.label = tabFirst
+                            ? ((t > 0 ? "药 " + t + " 片" : "") + (f == 1 ? " 过滤" : "") + (u == 1 ? " 紫外" : ""))
+                            : ((f == 1 ? "过滤" : "") + (u == 1 ? (f == 1 ? " 紫外" : "紫外") : "") +
+                               (t > 0 ? " " + t + " 药" : ""));
+                        if (c.label.Length == 0) c.label = "原水";
+                        r.combos.Add(c);
+
+                        // 目标先过关，再比钱；都不过关就留纯度最高的一条（仍显示，标不达标）。
+                        double score = ok ? cst : 1000.0 + (10000 - bp) * 1.0;
+                        if (mode == 1 && ok) score = -(bp * 1000.0 + w.v / 1000.0) + cst * 0.01;   // 效率：先看纯度/量
+                        if (mode == 2 && ok) score = cst;                                          // 性价比：先看钱
+                        if (best == null || score < bestScore) { best = c; bestScore = score; }
+                    }
+                }
+            }
+            if (best == null)
+            {
+                // 连过滤棉都没有：至少给一条「原水」方案，界面不至于空。
+                best = new Combo();
+                best.label = "原水"; best.feedUl = capUl; best.outUl = capUl;
+                best.purityBp = srcBp; best.nights = 0; best.ok = srcBp >= r.effTargetBp;
+                r.combos.Add(best);
+            }
+            bool reached = best.ok;
+            r.pick = best;
+            r.keep.Clear();
+            for (int i = 0; i < r.combos.Count; i++)
+                if (r.combos[i] != null && r.combos[i].ok) r.keep.Add(r.combos[i]);
+            if (r.keep.Count == 0)
+            {
+                // 目标确实到不了：仍把最接近的一条当推荐，标 shortOf，界面用黄字提示；
+                // 但不能让「更多方案」页空着（空表会让玩家以为又没方案）。
+                r.keep.Add(best);
+            }
+            r.ok = true;
+            r.shortOf = !reached;
+            r.outUl = best.outUl; r.finalBp = best.purityBp;
+            r.tablets = best.tablets; r.filterUsed = best.filterUsed; r.uvUsed = best.uv ? 1 : 0;
+            r.cost = best.cost;
+            r.perL = best.outUl > 0 ? best.cost * 1000000.0 / best.outUl : 0;
+            r.contamInUl = (long)capUl * (10000L - srcBp) / 10000L;
+            r.contamOutUl = best.outUl > 0 ? (long)best.outUl * (10000L - best.purityBp) / 10000L : 0;
+
+            SimulateSteps(r, best.feedUl, best.filter, best.uv, best.tablets, 0, best.filterUsed);
+            return r;
+        }
+
         private static Report BuildReport(long capUl, int srcBp, int perf, int q, int targetBp,
                                           string srcName, string bottleName, bool full, int mode = 0,
                                           int pre = 0, int post = 0,
                                           int ownTablets = -1, bool ownFilter = true, bool ownUv = true,
                                           int ownHydraDur = -1)
         {
+            ownFilter = ownFilter && AllowFilter;
+            ownUv = ownUv && AllowUv;
+            if (!AllowTablets) ownTablets = 0;
+            // 前置 5/6/7/8 = 药片、药片+紫外、药片+紫外+过滤棉、药片+过滤棉：
+            // 玩家要求“药片在前”，先结算药片再走过滤棉/紫外。前置 0-4 仍按网页老顺序。
+            WaterMath.TabletsFirst = pre >= 5;
+            if (NoMachine || !AllowMachine)
+                return BuildNoMachine(capUl, srcBp, perf, q, targetBp, srcName, bottleName, mode,
+                                      pre, post, ownTablets, ownFilter, ownUv);
+
             var r = new Report();
             r.capUl = capUl; r.srcBp = srcBp; r.perf = perf; r.q = q; r.targetBp = targetBp;
             r.srcName = srcName; r.bottleName = bottleName;
@@ -812,7 +1061,15 @@ namespace WaterCalcMod
             r.bestUl = PurifierUi.MaxKeepUl((int)capUl, srcBp, perf, q, targetBp);
             // 容器装得下就显示满：差 ≤1 mL 的零头不当成「还差 1 mL」（玩家 m00160：20 L 显示 19999；游戏本身四舍五入）
             if (r.bestUl > 0 && capUl > 0 && capUl - r.bestUl <= 1000) r.bestUl = capUl;
-            if (r.bestUl <= 0) { r.ok = false; return r; }
+            if (r.bestUl <= 0)
+            {
+                // 目标设到本机上限以上（例如「纯水 100%」）时 MaxKeepUl 会返回 0。
+                // 不能直接 return 空报告：界面会停在上一份锁定方案，玩家看到「改目标没反应」。
+                // 仍按整容器给一份最接近的方案，shortOf=true 让界面用黄字提示到不了。
+                r.bestUl = capUl;
+                r.shortOf = true;
+                r.ok = true;
+            }
             r.ok = true;
 
             r.pour = Plan(r.bestUl);
@@ -828,7 +1085,8 @@ namespace WaterCalcMod
             int tab = 0, nights = 0, fUsed = 0;
             double bestCost = double.MaxValue;
             bool found = false;
-            for (int t = 0; t <= MaxTablets; t++)
+            int tabMax = TabletCap(ownTablets);
+            for (int t = 0; t <= tabMax; t++)
             {
                 for (int f = 0; f < 2; f++)
                 {
@@ -837,7 +1095,7 @@ namespace WaterCalcMod
                         var p = WaterMath.Run(r.useUl, srcBp, perf, q, f == 1, u == 1, t, targetBp, NightCap, CapOf(r, r.useUl));
                         if (!p.ok) continue;
                         double c = t * TabletCost + (f == 1 ? (p.filterUsed / (double)FilterDurPer) * FilterCost : 0) +
-                                   p.nights * EnergyPerNight;
+                                   p.nights * EnergyCostPerNight;
                         if (!found || c < bestCost - 1e-9 ||
                             (Math.Abs(c - bestCost) <= 1e-9 && p.nights < nights))
                         {
@@ -859,7 +1117,7 @@ namespace WaterCalcMod
             // 逐步模拟：接水 → 过滤 → 紫外 → 每晚 → 药片（最后）
             // 抽成方法：模式选择发生在后面（PickByMode），选中方案变了要按它再算一次，
             // 否则「步骤」页永远显示按最省算出来的那一套（玩家反馈：切效率/性价比步骤没动静）。
-            SimulateSteps(r, r.useUl, uf, uv, tab, nights, fUsed);
+            SimulateSteps(r, r.useUl, uf, uv, tab, NoMachine ? 0 : nights, fUsed);   // 不用机器：没有过夜
 
             r.mode = mode;
             if (full)
@@ -906,7 +1164,8 @@ namespace WaterCalcMod
                         }
                     }
                     int pFilterUsed = r.pick.filter ? (int)r.pick.filterUsed : 0;
-                    SimulateSteps(r, r.pick.feedUl, r.pick.filter, r.pick.uv, r.pick.tablets, pNights, pFilterUsed, r.pick.hydra);
+                    SimulateSteps(r, r.pick.feedUl, r.pick.filter, r.pick.uv, r.pick.tablets,
+                        NoMachine ? 0 : pNights, pFilterUsed, r.pick.hydra && !NoMachine);
                 }
             }
             return r;
@@ -915,6 +1174,9 @@ namespace WaterCalcMod
         /// <summary>按给定方案逐步模拟：接水 → 过滤 → 紫外 → 每晚 → 药片（最后）。
         /// 会被调两次：BuildReport 里先按自动方案算一遍，PickByMode 选中模式方案后再按 r.pick 重算，
         /// 保证「步骤」页与卡片/方案表说的是同一套流程。</summary>
+        /// <summary>「不用净水器」：玩家没机器时，方案只走 过滤棉/紫外灯/药片，机器加成与能耗全部为 0，过夜步骤直接不出现。</summary>
+        public static bool NoMachine = false;
+
         private static void SimulateSteps(Report r, long feedUl, bool uf, bool uv, int tab, int nights, int fUsed, bool hydra = false)
         {
             r.steps.Clear();
@@ -922,7 +1184,7 @@ namespace WaterCalcMod
             var w = WaterMath.Build(feedUl, r.srcBp, CapOf(r, feedUl));
             r.contamInUl = w.Impurity;
             var s0 = new Step();
-            s0.title = "接水 " + Ml(feedUl) + " mL · " + r.srcName + " " + PlanText.Pct(r.srcBp);
+            s0.title = "接水 " + Ml(feedUl) + " mL";
             s0.detail = "";
             r.steps.Add(s0);
 
@@ -933,17 +1195,26 @@ namespace WaterCalcMod
                 if (hydraDur > 0)
                 {
                     var sh = new Step();
-                    sh.title = "海德拉 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
-                    sh.detail = "洗成 98% 基础水（化学 1.60% · 重金属 0.40%），耗耐久 " + hydraDur + " 点";
+                    sh.title = "海德拉 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                    sh.detail = "耗耐久 " + hydraDur + " 点";
                     r.steps.Add(sh);
                 }
             }
 
+            if (tab > 0 && WaterMath.TabletsFirst)
+            {
+                long before = w.v;
+                WaterMath.Tablet(w, tab);
+                var st = new Step();
+                st.title = "前置 " + tab + " 片药片 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                st.detail = "带走 " + Ml2(before - w.v) + " mL 杂质";
+                r.steps.Add(st);
+            }
             if (uf)
             {
                 int used = WaterMath.Filter(w, FilterDur);
                 var st = new Step();
-                st.title = "过滤棉 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "过滤棉 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "耗耐久 " + used + " 点";
                 r.steps.Add(st);
             }
@@ -952,27 +1223,27 @@ namespace WaterCalcMod
                 // 玩家：紫外灯是**工具**，不是消耗品，没有使用次数；体积不变、一次照过即可。
                 WaterMath.Uv(w, 1);
                 var st = new Step();
-                st.title = "紫外灯 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
-                st.detail = "微生物转纯水，体积不变（工具，不消耗）";
+                st.title = "紫外灯 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                st.detail = "体积不变";
                 r.steps.Add(st);
             }
             for (int n = 1; n <= nights; n++)
             {
                 var st = new Step();
-                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "本晚目标 " + PlanText.Pct(r.effTargetBp);
                 WaterMath.Purify(w, r.perf, r.q);
                 r.nights.Add(new NightRow { n = n, volUl = w.v, purityBp = w.Purity });
-                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 r.steps.Add(st);
                 if (w.Purity >= r.effTargetBp) break;
             }
-            if (tab > 0)
+            if (tab > 0 && !WaterMath.TabletsFirst)
             {
                 long before = w.v;
                 WaterMath.Tablet(w, tab);
                 var st = new Step();
-                st.title = "最后 " + tab + " 片药片 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "最后 " + tab + " 片药片 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "带走 " + Ml2(before - w.v) + " mL 杂质";
                 r.steps.Add(st);
             }
@@ -983,7 +1254,7 @@ namespace WaterCalcMod
             r.nightsCount = nights;
             r.budgetUl = WaterMath.Budget(r.capUl, r.srcBp, r.perf);
             r.cost = tab * TabletCost + (fUsed / (double)FilterDurPer) * FilterCost +
-                     nights * EnergyPerNight +
+                     nights * EnergyCostPerNight +
                      (hydraDur > 0 ? (hydraDur / (double)WaterMath.HYDRA_MAX_DUR) * HydraCost : 0);
             r.perL = r.outUl > 0 ? r.cost / (r.outUl / 1000000.0) : 0;
         }
@@ -1000,6 +1271,11 @@ namespace WaterCalcMod
                 if (pre == 2 && !(c.filter && !c.uv)) continue;
                 if (pre == 3 && !(c.uv && !c.filter)) continue;
                 if (pre == 4 && !(c.filter && c.uv)) continue;   // 玩家新增：过滤棉 + 紫外 一起上
+                // 玩家 2026-11-13（第七轮）：前置还要能带药片，按组合区分。
+                if (pre == 5 && !(c.tablets >= 1 && !c.filter && !c.uv)) continue;              // 药片
+                if (pre == 6 && !(c.tablets >= 1 && c.uv && !c.filter)) continue;                // 药片+紫外
+                if (pre == 7 && !(c.tablets >= 1 && c.uv && c.filter)) continue;                 // 药片+紫外+过滤棉
+                if (pre == 8 && !(c.tablets >= 1 && c.filter && !c.uv)) continue;                // 药片+过滤棉
                 if (post == 1 && c.tablets != 0) continue;
                 if (post >= 2 && c.tablets != post - 1) continue;
                 keep.Add(c);
@@ -1013,6 +1289,7 @@ namespace WaterCalcMod
         private static void PickByMode(Report r, int mode)
         {
             r.mode = mode;
+            r.needHydra = false;
             Combo best = null;
             long fillLine = r.capUl > 0 ? (long)(r.capUl * 0.99) : 0;
             // 只在「前置/后置筛过之后」的候选里挑；筛空才退回全量（界面会提示凑不出）。
@@ -1035,30 +1312,51 @@ namespace WaterCalcMod
                 if (okOnly.Count > 0) src = okOnly;
             }
 
-            // 海德拉门（玩家 2026-11-10）：开关做进设置里，三档默认口径是「自动」——
-            //   自动(0)：只要**有任何不带海德拉的达标方案**就剔掉它（海德拉贵、难弄，别动不动就推）；
-            //   强制(1)：装得下就用它装满；
-            //   不用(2)：任何档位都不让它参战。
+            // 玩家 2026-11-14 定案：性价比先按「最少可行晚数」分池，池内再按每升成本；
+            // 海德拉只在这个最小晚数池里没有非海德拉方案时才回来，并标注“仅此方案需海德拉”。
+
+            // 海德拉门（玩家 2026-11-10，2026-11-13 第六轮改）：自动档不再「有非海德拉方案就无条件剔掉」——
+            // 玩家实测 56.94% 的水按性价比反而比效率贵，就是因为海德拉被这刀切掉、只能多跑滤棉/药片。
+            // 现在交给下面的「一晚净赚」排名自己算：海德拉贵就用便宜的，海德拉划算才用它。
             if (HydraMode == 2)
             {
                 var noHyd0 = new System.Collections.Generic.List<Combo>();
                 for (int i = 0; i < src.Count; i++) if (src[i] != null && !src[i].hydra) noHyd0.Add(src[i]);
                 if (noHyd0.Count > 0) src = noHyd0;
             }
-            else if (HydraMode == 0 && mode != 3 && mode != 1 && fillLine > 0)
+
+            // 玩家 2026-11-14 定案：晚数只按「能不能做到」决定，不参与性价比竞争。
+            // 能一晚达标就只用一晚池；一晚池空才放开 2 晚，依次到 NightCap。
+            // 质量档 mode==3 本来就不要求达标，不套这个池。
+            if (mode != 3)
             {
-                bool hasNonHydraOk = false;
-                for (int i = 0; i < src.Count; i++)
+                int poolN = 1;
+                bool any = false;
+                int maxN = NightCap > 0 ? NightCap : 1;
+                for (int n = 1; n <= maxN; n++)
                 {
-                    var c0 = src[i];
-                    if (c0 != null && !c0.hydra && c0.ok) { hasNonHydraOk = true; break; }
+                    for (int i = 0; i < src.Count; i++)
+                        if (src[i] != null && src[i].ok && src[i].nights == n) { any = true; break; }
+                    if (any) { poolN = n; break; }
                 }
-                if (hasNonHydraOk)
+                if (any)
                 {
-                    var noHyd = new System.Collections.Generic.List<Combo>();
-                    for (int i = 0; i < src.Count; i++) if (src[i] != null && !src[i].hydra) noHyd.Add(src[i]);
-                    if (noHyd.Count > 0) src = noHyd;
+                    var pool = new System.Collections.Generic.List<Combo>();
+                    for (int i = 0; i < src.Count; i++)
+                        if (src[i] != null && src[i].ok && src[i].nights == poolN) pool.Add(src[i]);
+                    if (pool.Count > 0) src = pool;
                 }
+            }
+
+            // 玩家 2026-11-14 最新定案：晚数池先定死，池内再按非海德拉 / 每升成本挑。
+            // 这样「5 晚已达标却出 6 晚」会先在 poolN 上暴露，不会被后面的排序键盖掉；
+            // 只有这个最小晚数池里一条非海德拉都没有，才回海德拉并标注。
+            if (mode == 2)
+            {
+                var noHyd2 = new System.Collections.Generic.List<Combo>();
+                for (int i = 0; i < src.Count; i++) if (src[i] != null && !src[i].hydra) noHyd2.Add(src[i]);
+                if (noHyd2.Count > 0) src = noHyd2;
+                else r.needHydra = true;
             }
 
             // 价格基准（玩家 2026-11-11 定案）：默认/性价比两档一律按「一晚净赚 = 卖水钱 − 本钱」排名。
@@ -1078,12 +1376,24 @@ namespace WaterCalcMod
                     else if (c.outUl == best.outUl && c.cost < best.cost) best = c;
                     else if (c.outUl == best.outUl && c.cost == best.cost && c.purityBp > best.purityBp) best = c;
                 }
-                else if (mode == 0 || mode == 2)
+                else if (mode == 2)
                 {
-                    // 默认 / 性价比（玩家 2026-11-11 定案）：按**一晚净赚**排（卖水钱 − 本钱）。
-                    // 平手才比出水多、再比本钱少。每升成本只用来显示，不再参与挑选。
-                    double cp = ProfitOf(c);
-                    double bp0 = ProfitOf(best);
+                    // 玩家 2026-11-14 定案（第三次修正）：
+                    // 性价比 = 「不碰海德拉」前提下，每晚净赚最多。
+                    // 不许用每升成本当主键：零耗材方案每升 0 元，必然排第一，
+                    // 会把“加滤棉/药片把水救回来多赚 900”的方案全部挤掉（实测 0.82 vs 4.24）。
+                    // 晚数已由分池锁死，这里不再引入晚数变量。
+                    double cp = ProfitOf(c) / (c.nights > 0 ? c.nights : 1);
+                    double bp0 = ProfitOf(best) / (best.nights > 0 ? best.nights : 1);
+                    if (cp > bp0 + 1e-9) best = c;
+                    else if (Math.Abs(cp - bp0) <= 1e-9 && c.outUl > best.outUl) best = c;
+                    else if (Math.Abs(cp - bp0) <= 1e-9 && c.outUl == best.outUl && c.cost < best.cost) best = c;
+                }
+                else if (mode == 0)
+                {
+                    // 默认档维持「每晚净赚」（批次 16 定案，不动）
+                    double cp = ProfitOf(c) / (c.nights > 0 ? c.nights : 1);
+                    double bp0 = ProfitOf(best) / (best.nights > 0 ? best.nights : 1);
                     if (cp > bp0 + 1e-9) best = c;
                     else if (Math.Abs(cp - bp0) <= 1e-9 && c.outUl > best.outUl) best = c;
                     else if (Math.Abs(cp - bp0) <= 1e-9 && c.outUl == best.outUl && c.cost < best.cost) best = c;
@@ -1232,6 +1542,7 @@ namespace WaterCalcMod
             int d = WaterMath.Hydra(w);
             if (d <= 0) return res;                       // >30 L，或这瓶水本来就比 98% 干净
             res.hydraDur = d;
+            if (WaterMath.TabletsFirst && t > 0) WaterMath.Tablet(w, t);
             if (f) res.filterUsed = WaterMath.Filter(w, FilterDur);
             if (u) WaterMath.Uv(w, 1);
             int n = 0;
@@ -1244,7 +1555,7 @@ namespace WaterCalcMod
                 n++;
             }
             if (n < 1) n = 1;                             // 过关那晚总要跑
-            if (t > 0) WaterMath.Tablet(w, t);
+            if (t > 0 && !WaterMath.TabletsFirst) WaterMath.Tablet(w, t);
             res.nights = n; res.outUl = w.v; res.purityBp = w.Purity;
             res.ok = w.Purity >= r.effTargetBp;
             return res;
@@ -1289,6 +1600,8 @@ namespace WaterCalcMod
 
         private static void BuildCombos(Report r, int pre, int ownTablets, bool ownFilter, bool ownUv, int ownHydraDur)
         {
+            if (NoMachine) ownHydraDur = 0;   // 没有净水器：海德拉也不在方案里（它也是机器）
+            if (!AllowHydra) ownHydraDur = 0;
             // 生水已经比 98% 干净时海德拉洗不动（Hydra 直接返回 0），整维不用建 —— 少一半扫描。
             // 性价比档按「实际持知道具」建：没药片/没滤棉/没紫外/没海德拉耐久就不建对应的组合。
             bool tryHydra = r.srcBp < WaterMath.HYDRA_BASE_BP && ownHydraDur != 0;
@@ -1320,8 +1633,11 @@ namespace WaterCalcMod
                             c.label = baseLabel + (t > 0 ? " + " + t + " 片药片（过夜后放）" : "");
                             c.feedUl = feed; c.outUl = p.output; c.purityBp = p.purity; c.ok = p.ok;
                             c.filterUsed = p.filterUsed;
+                            // 2026-11-13：机器路径的方案至少跑一晚；以前 new Combo 后没写 nights，
+                            // 默认 0，主页 StepChain 就跳过「1 晚」，玩家只看到「滤棉/紫外/药」。
+                            c.nights = p.nights > 0 ? p.nights : 1;
                             c.cost = t * TabletCost + (c.filter ? (p.filterUsed / (double)FilterDurPer) * FilterCost : 0) +
-                                     EnergyPerNight;
+                                     EnergyCostPerNight;
                             r.combos.Add(c);
                         }
 
@@ -1355,7 +1671,7 @@ namespace WaterCalcMod
                         ch.filterUsed = hr.filterUsed;
                         ch.cost = t * TabletCost + (ch.filter ? (hr.filterUsed / (double)FilterDurPer) * FilterCost : 0)
                                  + (hr.hydraDur / (double)WaterMath.HYDRA_MAX_DUR) * HydraCost
-                                 + EnergyPerNight * hr.nights;
+                                 + EnergyCostPerNight * hr.nights;
                         r.combos.Add(ch);
                     }
                 }
@@ -1413,7 +1729,7 @@ namespace WaterCalcMod
             {
                 var w = WaterMath.Build(r.useUl, r.srcBp, CapOf(r, r.useUl));
                 WaterMath.Tablet(w, t);
-                if (t > 1) sb.Append(" · ");
+                if (t > 1) sb.Append("  ");
                 sb.Append(t).Append(" 片 → ").Append(Ml(w.v)).Append(" mL ").Append(PlanText.Pct(w.Purity));
             }
             r.tabletsOnly = sb.ToString();
@@ -1424,13 +1740,18 @@ namespace WaterCalcMod
         /// <summary>
         /// 容器里**已经有水**时（玩家自己调的/混过的液体）：按这瓶水的**真实六项配比**出方案，
         /// 而不是拿「今日水龙头」重建一瓶生水去算「接多少」。
-        /// 玩家 2026-11-09 报：容器里 3650 mL·94.79%，卡一/卡二还在按今日铁锈水报「接 1845 → 出 1800」。
+        /// 玩家 2026-11-09 报：容器里 3650 mL  94.79%，卡一/卡二还在按今日铁锈水报「接 1845 → 出 1800」。
         /// 这里枚举 过滤/紫外 × 药片 × 晚数，取「达标」的全集，再按模式挑一条。
         /// </summary>
         public static Report BuildFromWater(WaterMath.Water w0, int perf, int q, int targetBp,
-                                            int mode, int pre, int post, string bottleName)
+                                            int mode, int pre, int post, string bottleName,
+                                            int ownTablets = -1)
         {
-            var full = BuildFromWaterCore(w0, perf, q, targetBp, mode, pre, post, bottleName);
+            // 前置带药片（5-8）时药片先于过滤/紫外；设置页切设备后这里也要按最新开关走。
+            WaterMath.TabletsFirst = pre >= 5;
+            if (NoMachine || !AllowMachine)
+                return BuildFromWaterNoMachine(w0, perf, q, targetBp, mode, pre, post, bottleName, ownTablets);
+            var full = BuildFromWaterCore(w0, perf, q, targetBp, mode, pre, post, bottleName, ownTablets);
             if (full == null) return null;
             full.fitUl = w0.v; full.dumpUl = 0; full.fitPartial = false;
             if (full.pick != null) return full;
@@ -1444,7 +1765,7 @@ namespace WaterCalcMod
                 long mid = lo + (hi - lo) / 2;
                 var wm = ScaleWater(w0, mid);
                 if (wm == null) { hi = mid; continue; }
-                var rep = BuildFromWaterCore(wm, perf, q, targetBp, mode, pre, post, bottleName);
+                var rep = BuildFromWaterCore(wm, perf, q, targetBp, mode, pre, post, bottleName, ownTablets);
                 if (rep != null && rep.pick != null) { keepRep = rep; keepV = wm.v; lo = mid; }
                 else hi = mid;
             }
@@ -1475,7 +1796,97 @@ namespace WaterCalcMod
             return full;
         }
 
-        /// <summary>按同一六项配比把水样缩到 newV（µL）：只是「少装一点」，纯度不变。</summary>
+        /// <summary>设置页关掉「净水器」或选了「不用机器」时，已有水也要有一条“不过夜”的方案：
+        /// 只走 海德拉/过滤棉/紫外/药片，体积与纯度按这瓶水的真实六项配比算。</summary>
+        private static Report BuildFromWaterNoMachine(WaterMath.Water w0, int perf, int q, int targetBp,
+                                                      int mode, int pre, int post, string bottleName, int ownTablets)
+        {
+            if (w0 == null || w0.v <= 0) return null;
+            // 自动（pre=0）不继承上一次的药片在前状态；只有明确选 5-8 才先放药片。
+            WaterMath.TabletsFirst = pre >= 5;
+            var r = new Report();
+            r.fromWater = true; r.water0 = w0.Clone(); r.mode = mode;
+            r.perf = 0; r.q = 0;
+            r.bottleName = string.IsNullOrEmpty(bottleName) ? "容器" : bottleName;
+            r.srcName = "容器里已有的水"; r.srcBp = w0.Purity;
+            r.capUl = w0.v; r.bestUl = w0.v; r.useUl = w0.v;
+            r.fitUl = w0.v; r.dumpUl = 0; r.fitPartial = false;
+            int cap = WaterMath.CapOf(0);
+            r.targetBp = targetBp;
+            r.effTargetBp = targetBp > cap ? cap : targetBp;
+            r.capShort = targetBp > cap;
+            r.contamInUl = w0.Impurity;
+
+            int tabMax = AllowTablets ? TabletCap(ownTablets) : 0;
+            if (tabMax < 0) tabMax = 0;
+            int filterDur = AllowFilter ? (FilterDur > 0 ? FilterDur : FilterDurPer) : 0;
+            PurifierUi.Log("[nomachine] v=" + w0.v + " bp=" + w0.Purity + " tabMax=" + tabMax
+                           + " fdur=" + filterDur + " pre=" + pre + " post=" + post
+                           + " allow=" + (AllowFilter ? 1 : 0) + (AllowUv ? 1 : 0) + (AllowTablets ? 1 : 0) + (AllowHydra ? 1 : 0));
+            for (int h = 0; h <= (AllowHydra ? 1 : 0); h++)
+            {
+                for (int f = 0; f <= (filterDur > 0 ? 1 : 0); f++)
+                {
+                    for (int u = 0; u <= (AllowUv ? 1 : 0); u++)
+                    {
+                        if (pre == 1 && (f == 1 || u == 1)) continue;
+                        if (pre == 2 && !(f == 1 && u == 0)) continue;
+                        if (pre == 3 && !(f == 0 && u == 1)) continue;
+                        if (pre == 4 && !(f == 1 && u == 1)) continue;
+                        for (int t = 0; t <= tabMax; t++)
+                        {
+                            if (pre == 5 && !(t >= 1 && f == 0 && u == 0)) continue;
+                            if (pre == 6 && !(t >= 1 && f == 0 && u == 1)) continue;
+                            if (pre == 7 && !(t >= 1 && f == 1 && u == 1)) continue;
+                            if (pre == 8 && !(t >= 1 && f == 1 && u == 0)) continue;
+                            if (post == 1 && t != 0) continue;
+                            if (post >= 2 && t != post - 1) continue;
+
+                            var w = w0.Clone();
+                            int hDur = 0;
+                            if (h == 1)
+                            {
+                                hDur = WaterMath.Hydra(w);
+                                if (hDur <= 0) continue;
+                            }
+                            bool tabFirst = pre >= 5;
+                            if (tabFirst && t > 0) WaterMath.Tablet(w, t);
+                            int fUsed = f == 1 ? WaterMath.Filter(w, filterDur) : 0;
+                            if (u == 1) WaterMath.Uv(w, 1);
+                            if (!tabFirst && t > 0) WaterMath.Tablet(w, t);
+                            int bp = w.Purity;
+                            var c = new Combo();
+                            c.filter = (f == 1); c.uv = (u == 1); c.tablets = t;
+                            c.hydra = (h == 1); c.hydraDur = hDur;
+                            c.nights = 0; c.feedUl = w0.v; c.outUl = w.v;
+                            c.filterUsed = fUsed; c.purityBp = bp; c.ok = bp >= r.effTargetBp;
+                            string baseLabel = PreLabel(f == 1, u == 1);
+                            c.label = (h == 1 ? "海德拉(" + hDur + "耐久) + " : "")
+                                    + baseLabel + (t > 0 ? (tabFirst ? " + " + t + " 片药片（前置）" : " + " + t + " 片药片") : "");
+                            if (c.label.Length == 0) c.label = "原样";
+                            c.cost = t * TabletCost + (f == 1 ? (fUsed / (double)FilterDurPer) * FilterCost : 0)
+                                   + (h == 1 ? (hDur / (double)WaterMath.HYDRA_MAX_DUR) * HydraCost : 0);
+                            r.combos.Add(c);
+                        }
+                    }
+                }
+            }
+            PurifierUi.Log("[nomachine] combos=" + r.combos.Count + " eff=" + r.effTargetBp);
+            // 玩家 2026-11-14 定案：从水算方案也只认 PickByMode 一套规则，
+            // 否则计算页的性价比会按“每升最省”把海德拉绑上，和主页对不上。
+            PickByMode(r, mode);
+            if (r.pick == null) { r.ok = false; return r; }
+            r.ok = r.pick.ok;
+            r.outUl = r.pick.outUl; r.finalBp = r.pick.purityBp;
+            r.tablets = r.pick.tablets; r.filterUsed = r.pick.filterUsed;
+            r.uvUsed = r.pick.uv ? 1 : 0; r.nightsCount = r.pick.nights;
+            r.cost = r.pick.cost;
+            r.perL = r.outUl > 0 ? r.cost / (r.outUl / 1000000.0) : 0;
+            SimulateStepsFromWater(r, r.pick);
+            return r;
+        }
+
+
         private static WaterMath.Water ScaleWater(WaterMath.Water w, long newV)
         {
             if (w == null || w.v <= 0 || newV <= 0) return null;
@@ -1492,7 +1903,8 @@ namespace WaterCalcMod
         }
 
         private static Report BuildFromWaterCore(WaterMath.Water w0, int perf, int q, int targetBp,
-                                                 int mode, int pre, int post, string bottleName)
+                                                 int mode, int pre, int post, string bottleName,
+                                                 int ownTablets = -1)
         {
             if (w0 == null || w0.v <= 0) return null;
             var r = new Report();
@@ -1513,13 +1925,15 @@ namespace WaterCalcMod
             r.effTargetBp = effTarget;
             r.contamInUl = w0.Impurity;
 
-            for (int h = 0; h <= 1; h++)
+            int tabMax = AllowTablets ? TabletCap(ownTablets) : 0;
+            if (tabMax < 0) tabMax = 0;
+            for (int h = 0; h <= (AllowHydra ? 1 : 0); h++)
             {
-                for (int f = 0; f <= 1; f++)
+                for (int f = 0; f <= (AllowFilter ? 1 : 0); f++)
                 {
-                    for (int u = 0; u <= 1; u++)
+                    for (int u = 0; u <= (AllowUv ? 1 : 0); u++)
                     {
-                        for (int t = 0; t <= MaxTablets; t++)
+                        for (int t = 0; t <= tabMax; t++)
                         {
                             var c = ComboFromWater(w0, h == 1, f == 1, u == 1, t, effTarget, perf, q);
                             if (c != null) r.combos.Add(c);
@@ -1545,66 +1959,21 @@ namespace WaterCalcMod
             // 前置/后置必须同样生效（玩家反复报「选了没反应」）；筛空时保留全量并置 filterEmpty 让界面说明。
             FilterByPrePost(r, pre, post);
 
-            // 海德拉门（玩家口径）：②「完全不用」一律剔除；①「自动」＝只有不用海德拉做不到目标时才允许出现。
-            // 以前 BuildFromWater 完全不看 HydraMode，60% 的水也直接推「海德拉 60 耐久」，玩家的设置等于没效。
-            if (HydraMode == 2)
-            {
-                r.combos.RemoveAll(delegate(Combo c) { return c.hydra; });
-                r.keep.RemoveAll(delegate(Combo c) { return c.hydra; });
-            }
-            else if (HydraMode == 0)
-            {
-                bool noHydraOk = false;
-                for (int i = 0; i < r.combos.Count; i++) { if (!r.combos[i].hydra) { noHydraOk = true; break; } }
-                if (noHydraOk)
-                {
-                    r.combos.RemoveAll(delegate(Combo c) { return c.hydra; });
-                    r.keep.RemoveAll(delegate(Combo c) { return c.hydra; });
-                }
-            }
+            // 玩家 2026-11-14 定案：从水算方案也只认 PickByMode 一套规则，
+            // 否则计算页的性价比会按“每升最省”把海德拉绑上，和主页对不上。
+            PickByMode(r, mode);
+            if (r.pick == null) { r.ok = false; return r; }
+            r.ok = r.pick.ok;
 
-            // 按模式挑：0 一晚就要 / 1 效率（出水最大，同量取省） / 2 性价比（每升最省） / 3 质量（纯度优先）
-            Combo best = null;
-            var src = r.keep.Count > 0 ? r.keep : r.combos;
-            for (int i = 0; i < src.Count; i++)
-            {
-                var c = src[i];
-                if (best == null) { best = c; continue; }
-                if (mode == 2)
-                {
-                    double pl = c.outUl > 0 ? c.cost / (c.outUl / 1000000.0) : double.MaxValue;
-                    double bl = best.outUl > 0 ? best.cost / (best.outUl / 1000000.0) : double.MaxValue;
-                    if (pl < bl - 1e-9 || (Math.Abs(pl - bl) <= 1e-9 && c.outUl > best.outUl)) best = c;
-                }
-                else if (mode == 3)
-                {
-                    if (c.purityBp > best.purityBp ||
-                        (c.purityBp == best.purityBp && (c.nights < best.nights || c.outUl > best.outUl))) best = c;
-                }
-                else if (mode == 0)
-                {
-                    bool cOne = c.nights <= 1, bOne = best.nights <= 1;
-                    if ((cOne && !bOne) || (cOne == bOne && (c.outUl > best.outUl ||
-                        (c.outUl == best.outUl && c.purityBp > best.purityBp)))) best = c;
-                }
-                else
-                {
-                    if (c.outUl > best.outUl || (c.outUl == best.outUl && c.cost < best.cost)) best = c;
-                }
-            }
-            r.pick = best;
-            if (best == null) { r.ok = false; return r; }
-            r.ok = true;
-
-            r.outUl = best.outUl;
-            r.finalBp = best.purityBp;
-            r.tablets = best.tablets;
-            r.filterUsed = best.filterUsed;
-            r.uvUsed = best.uv ? 1 : 0;
-            r.nightsCount = best.nights;
-            r.cost = best.cost;
+            r.outUl = r.pick.outUl;
+            r.finalBp = r.pick.purityBp;
+            r.tablets = r.pick.tablets;
+            r.filterUsed = r.pick.filterUsed;
+            r.uvUsed = r.pick.uv ? 1 : 0;
+            r.nightsCount = r.pick.nights;
+            r.cost = r.pick.cost;
             r.perL = r.outUl > 0 ? r.cost / (r.outUl / 1000000.0) : 0;
-            SimulateStepsFromWater(r, best);
+            SimulateStepsFromWater(r, r.pick);
             return r;
         }
 
@@ -1620,6 +1989,7 @@ namespace WaterCalcMod
                 if (hDur <= 0) return null;          // 用不了（>33 L 或本来更干净）
             }
             int fUsed = 0;
+            if (WaterMath.TabletsFirst && t > 0) WaterMath.Tablet(w, t);
             if (f) fUsed = WaterMath.Filter(w, FilterDur);
             if (u) WaterMath.Uv(w, 1);
             int nights = 0;
@@ -1634,19 +2004,19 @@ namespace WaterCalcMod
             if (nights < 1) nights = 1;
             // 玩家 2026-11-11 定案：**公式不要动**（网页 V3.6 的算法是对的），别再事后夹纯度。
             // 之前「一晚 99.92%」是接口问题——读进来的水被判成 100%（见 BuildRealWater）。
-            if (t > 0) WaterMath.Tablet(w, t);
+            if (t > 0 && !WaterMath.TabletsFirst) WaterMath.Tablet(w, t);
             if (w.Purity < targetBp) return null;
             var c = new Combo();
             c.filter = f; c.uv = u; c.tablets = t; c.nights = nights; c.hydra = h; c.hydraDur = hDur;
             string baseLabel = (!f && !u && t == 0) ? "原样跑一晚" : PreLabel(f, u);
             c.label = (h ? "海德拉(" + hDur + "耐久) + " : "")
-                    + baseLabel + (t > 0 ? " + " + t + " 片药片（过夜后放）" : "")
+                    + baseLabel + (t > 0 ? (WaterMath.TabletsFirst ? " + " + t + " 片药片（前置）" : " + " + t + " 片药片（过夜后放）") : "")
                     + (nights > 1 ? "（" + nights + " 晚）" : "");
             c.feedUl = w0.v; c.outUl = w.v; c.purityBp = w.Purity; c.ok = true;
             c.filterUsed = fUsed;
             c.cost = t * TabletCost + (f ? (fUsed / (double)FilterDurPer) * FilterCost : 0)
                      + (h ? (hDur / (double)WaterMath.HYDRA_MAX_DUR) * HydraCost : 0)
-                     + EnergyPerNight * nights;
+                     + EnergyCostPerNight * nights;
             return c;
         }
 
@@ -1658,22 +2028,31 @@ namespace WaterCalcMod
             var w = r.water0 != null ? r.water0.Clone() : WaterMath.Build(pick.feedUl, r.srcBp, CapOf(r, pick.feedUl));
             r.contamInUl = w.Impurity;
             var s0 = new Step();
-            s0.title = "已有水 " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity) + "（不用再接水）";
+            s0.title = "已有水 " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity) + "（不用再接水）";
             s0.detail = "按这瓶水的真实六项配比算";
             r.steps.Add(s0);
             if (pick.hydra)
             {
                 int d = WaterMath.Hydra(w);
                 var sh = new Step();
-                sh.title = "海德拉 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
-                sh.detail = "洗成 98% 基础水（化学 1.60% · 重金属 0.40%），耗耐久 " + d + " 点";
+                sh.title = "海德拉 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                sh.detail = "耗耐久 " + d + " 点";
                 r.steps.Add(sh);
+            }
+            if (pick.tablets > 0 && WaterMath.TabletsFirst)
+            {
+                long before = w.v;
+                WaterMath.Tablet(w, pick.tablets);
+                var st = new Step();
+                st.title = "前置 " + pick.tablets + " 片药片 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                st.detail = "带走 " + Ml2(before - w.v) + " mL 杂质";
+                r.steps.Add(st);
             }
             if (pick.filter)
             {
                 int used = WaterMath.Filter(w, FilterDur);
                 var st = new Step();
-                st.title = "过滤棉 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "过滤棉 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "耗耐久 " + used + " 点";
                 r.steps.Add(st);
             }
@@ -1681,26 +2060,26 @@ namespace WaterCalcMod
             {
                 WaterMath.Uv(w, 1);
                 var st = new Step();
-                st.title = "紫外灯 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
-                st.detail = "微生物转纯水，体积不变（工具，不消耗）";
+                st.title = "紫外灯 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
+                st.detail = "体积不变";
                 r.steps.Add(st);
             }
-            int total = pick.nights > 0 ? pick.nights : 1;
+            int total = pick.nights > 0 ? pick.nights : 0;
             for (int n = 1; n <= total; n++)
             {
                 WaterMath.Purify(w, r.perf, r.q);
                 var st = new Step();
-                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "第 " + n + " 晚 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "本晚目标 " + PlanText.Pct(r.effTargetBp);
                 r.nights.Add(new NightRow { n = n, volUl = w.v, purityBp = w.Purity });
                 r.steps.Add(st);
             }
-            if (pick.tablets > 0)
+            if (pick.tablets > 0 && !WaterMath.TabletsFirst)
             {
                 long before = w.v;
                 WaterMath.Tablet(w, pick.tablets);
                 var st = new Step();
-                st.title = "最后 " + pick.tablets + " 片药片 → " + Ml(w.v) + " mL · " + PlanText.Pct(w.Purity);
+                st.title = "最后 " + pick.tablets + " 片药片 → " + Ml(w.v) + " mL  " + PlanText.Pct(w.Purity);
                 st.detail = "带走 " + Ml2(before - w.v) + " mL 杂质";
                 r.steps.Add(st);
             }

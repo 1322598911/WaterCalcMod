@@ -33,10 +33,8 @@ namespace WaterCalcMod
                     if (log != null) log.LogWarning("水价探针：找不到 WaterFeatureHelper.GetWaterPrice(int)，沿用 40 元/L");
                     return;
                 }
-                var post = typeof(WaterPricePatch).GetMethod("Post",
-                    BindingFlags.Static | BindingFlags.NonPublic);
                 var h = new Harmony("dsh.watercalc.price");
-                h.Patch(mb, null, new HarmonyMethod(post));
+                h.Patch(mb, null, new HarmonyMethod(typeof(WaterPricePatch), "Post"));
                 Ready = true;
                 if (log != null) log.LogInfo("水价探针已挂上（GetWaterPrice(int) Postfix）");
             }

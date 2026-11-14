@@ -8,10 +8,22 @@ namespace WaterCalcMod
     public static class PlanText
     {
         public static string Pct(int bp) { return (bp / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + "%"; }
+        /// <summary>精确纯度：参数是「万分之一基准再乘 100」的整数（98.9949% → 989949）。</summary>
+        public static string Pct4(long bp100) { return (bp100 / 10000.0).ToString("0.0000", CultureInfo.InvariantCulture) + "%"; }
         public static string Ml(long ul) { return (ul / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + " mL"; }
+        /// <summary>固定一位小数：1969.0 / 2000.0 mL（2 L 瓶只读到 1969 时不再四舍五入成 2000）。</summary>
+        public static string Ml1(long ul) { return (ul / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + " mL"; }
+        /// <summary>紧凑体积（不留空格）：1856.3mL / 1650mL —— 混水页那种窄富文本里一行放得下。</summary>
+        public static string MlTight(long ul) { return (ul / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + "mL"; }
+        /// <summary>每升成本显示：游戏按 μL 算完向上取整到 0.01 元（1.333 → 1.34，不是 1.33）。</summary>
+        public static string PerL(double yuan)
+        {
+            if (double.IsNaN(yuan) || double.IsInfinity(yuan) || yuan <= 0) return "0.00";
+            return (Math.Ceiling(yuan * 100.0 - 1e-7) / 100.0).ToString("0.00", CultureInfo.InvariantCulture);
+        }
 
         // ---------------- 玩家 2026-11-11：界面按「同类同色」上色 ----------------
-        // 要求原话：「不要用·来替代空格…同类属性比如 ml 比如多少元 一个颜色。优质水就蓝色吧」。
+        // 要求原话：「不要用  来替代空格…同类属性比如 ml 比如多少元 一个颜色。优质水就蓝色吧」。
         // 约定：标签用暖灰（和游戏原生 tooltip 的说明文字同色系）、毫升数用青、纯度用天蓝、
         //      钱用绿、警告用橙红、水质档位按等级上色（优质水蓝、纯水亮白、铁锈橙、沟渠褐）。
         public const string C_LABEL = "BCA98A";
@@ -37,16 +49,16 @@ namespace WaterCalcMod
             return Rich(C_MONEY, s + (suffix ?? ""));
         }
 
-        /// <summary>水质档位的颜色：优质水蓝、纯水亮白、基础水浅灰、幽灵紫、铁锈橙、沟渠褐。</summary>
+        /// <summary>水质档位的颜色：反编译原版色值（WaterFeatureHelper），玩家 2026-11-13 定案。</summary>
         public static string TierHex(string tierName)
         {
             if (tierName == null) return C_LABEL;
-            if (tierName.IndexOf("纯水") >= 0) return "C9F2FF";
-            if (tierName.IndexOf("优质") >= 0) return "6FA8FF";
-            if (tierName.IndexOf("基础") >= 0) return "DCDCDC";
-            if (tierName.IndexOf("幽灵") >= 0) return "C39BFF";
-            if (tierName.IndexOf("铁锈") >= 0) return "FFA35C";
-            if (tierName.IndexOf("沟渠") >= 0) return "A08A70";
+            if (tierName.IndexOf("纯水") >= 0) return "3D823F";
+            if (tierName.IndexOf("优质") >= 0) return "7AB053";
+            if (tierName.IndexOf("基础") >= 0) return "CCB987";
+            if (tierName.IndexOf("幽灵") >= 0) return "BA8953";
+            if (tierName.IndexOf("铁锈") >= 0) return "9B4A3D";
+            if (tierName.IndexOf("沟渠") >= 0) return "74313B";
             return C_LABEL;
         }
 
@@ -54,8 +66,8 @@ namespace WaterCalcMod
         public static string Overview(PanelModel m)
         {
             if (m == null || !m.HasBottle) return "机器里没有水瓶 —— 放一瓶水进「储水容器」槽。";
-            string s = m.VolumeMl.ToString() + "/" + m.CapacityMl.ToString() + " mL · " + Pct(m.PurityBp);
-            if (m.CapBp > 0) s += " · 本机上限 " + Pct(m.CapBp);
+            string s = m.VolumeMl.ToString() + "/" + m.CapacityMl.ToString() + " mL  " + Pct(m.PurityBp);
+            if (m.CapBp > 0) s += "  本机上限 " + Pct(m.CapBp);
             return s;
         }
 
@@ -71,17 +83,19 @@ namespace WaterCalcMod
         {
             return new string[]
             {
-                "【水质等级】纯水 99.90% / 优质 99.00–99.89% / 良好 98.00–98.99% / 基础 <98%",
-                "【一晚直出上限】铁锈水 91.0% → 99.01%（2L 瓶留 1650 mL）",
-                "沟渠水 91.24% → 99.01%（2L 瓶留 1500 mL 保守 / 1650 mL 上限）",
-                "【99.90 纯水】需要质量模组 +100；达不到时本机上限只有档位值",
-                "【上限档位】质量 <15→99.01 · 15-24→99.16 · 25-49→99.36 · 50-74→99.65 · 75-99→99.80 · 100-199→99.90 · ≥200→100.00",
-                "【顺序】先放药片/过滤棉，开紫外，再让净水器过夜；顺序反了结果会掉",
-                "【耗材】过滤棉处理 physical/organic/mineral；药片处理 chemical/microbe；紫外压 heavy",
-                "【药片】每片约 75 mL 微生物 + 化学 0.05%，放多了会稀释体积",
-                "【水商利润】基础水 2000 mL 买 80 卖 118，含加价小费可到 153",
-                "【体积】净水器不改变总体积，只把污染物清掉；留水量决定稀释比",
-                "【小瓶更好】体积越大稀释越狠，6L 需 98.11%，50L 需 98.87% 才达标",
+                "【水质等级】纯水 ≥99.90% / 优质 99.00–99.89% / 基础 <99.00%",
+                "【机器上限】质量 0→99.01  15→99.16  25→99.36  50→99.65  75→99.80  100→99.90  ≥200→100.00",
+                "【99.00 与 99.01】99.00 是优质水门槛；99.01 是质量 0 机器的默认上限，不是全游戏上限",
+                "【药片】每片先加 15 mL 氯；预算约 76.95 mL，先清化学到总量 0.7%，余力清微生物；逐片结算体积，满瓶会挤出水",
+                "【药片与上限】药片能继续把纯度推过机器上限（实机 q0 可到 99.29 附近），不要把 99.01 当最终值",
+                "【顺序】没有固定顺序：药片可前置也可后置；水+药片+过滤能一晚优质，后置通常更赚；以面板方案为准",
+                "【过滤棉】清 physical/organic/mineral，按 3 L 一份计耐久；400 耐久一张，尾差可再补一小段",
+                "【紫外】只清微生物，体积不变，不耗耐久；放过滤前/后对矿物等结果基本等价",
+                "【海德拉】1 点=100 mL 计费单位，整瓶归一到 98%，不是只洗 100 mL；必须在净化器前，净化器后水已更纯它不工作",
+                "【净水器】按机器性能清杂质，纯度封顶为机器上限；清掉的杂质离体，出水体积会小于进水",
+                "【多晚】一晚做不到可以加晚数；面板按 N 晚给方案，不再只推一晚",
+                "【收益】卖价 = 出水升 × 40 × 档位倍率（基础1.0/优质1.5/纯水2.0）；成本=药片6/片+滤棉25/400耐久+海德拉325/300耐久+电1.5/晚",
+                "以上是机制说明，具体以当前面板方案为准",
             };
         }
         /// <summary>一条方案的人话（用于列表）。</summary>
@@ -112,11 +126,11 @@ namespace WaterCalcMod
         {
             if (p == null) return "做不到";
             if (!p.possible) return "一晚最多 " + Pct(p.purity) + "（先兑水或换小瓶）";
-            if (p.asIs) return "原样跑 1 晚 → " + Pct(p.purity) + " · " + Ml(p.output);
+            if (p.asIs) return "原样跑 1 晚 → " + Pct(p.purity) + "  " + Ml(p.output);
             return "先倒掉 " + Ml(p.drainUl) + "（留 " + Ml(p.keepUl) + "）" +
                    (p.tablets > 0 ? " + " + p.tablets + " 片药片" : "") +
                    (p.useFilter ? " + 过滤棉" : "") + (p.useUv ? " + 紫外" : "") +
-                   " → 跑 1 晚 → " + Ml(p.output) + " · " + Pct(p.purity);
+                   " → 跑 1 晚 → " + Ml(p.output) + "  " + Pct(p.purity);
         }
 
         /// <summary>图标 hover 用的一行结论。</summary>
@@ -144,7 +158,7 @@ namespace WaterCalcMod
         // 前置 5 档：0 自动 / 1 不处理 / 2 过滤棉 / 3 紫外 / 4 过滤棉+紫外
         // ★玩家报的 bug：4 档以前没有名字，Rebuild 用 PreNames[Min(PreMode, len-1)] 把 4 夹回 3，
         //   所以按到「过滤棉+紫外」界面立刻变成「紫外」。文案必须跟 PreUi 一样有 5 项。
-        public static readonly string[] PreNames = { "自动", "不处理", "过滤棉", "紫外", "过滤棉+紫外" };
+        public static readonly string[] PreNames = { "自动", "不处理", "过滤棉", "紫外", "过滤棉+紫外", "药片", "药片+紫外", "药片+紫外+过滤棉", "药片+过滤棉" };
         /// <summary>净化后（对应网页计算器的「净化后」下拉）：0=自动，1=不放药片，2..4=固定 1..3 片。</summary>
         public static readonly string[] PostNames = { "按模式最优", "不放药片", "1 片药片", "2 片药片", "3 片药片" };
 

@@ -100,6 +100,7 @@ namespace WaterCalcMod
             if (line == "paper") return Core.ClosePaper();
             if (line == "night") return Core.SkipNight();
             if (line == "pstate") return Core.PaperState();
+            if (line == "key?") return Hotkey.Diag();
 #if DEV
             // 早晨报告（日历/夜间报告/状态 那张平板）：morning / morning=force / morning=off / morning=on
             if (line == "morning" || line.StartsWith("morning=")) return MorningAuto.Close(line.IndexOf('=') >= 0 ? line.Substring(line.IndexOf('=') + 1).Trim() : "");
@@ -126,6 +127,8 @@ namespace WaterCalcMod
             if (line == "tap?") return PurifierUi.TapReport();
             if (line.StartsWith("uncap=")) { PurifierUi.UncapEff = line.Substring(6).Trim() == "1"; PurifierUi.RebuildPublic(); return "uncap -> " + (PurifierUi.UncapEff ? 1 : 0); }
             if (line.StartsWith("taplock=")) { PurifierUi.ForceTapLocked = int.Parse(line.Substring(8)); PurifierUi.RebuildPublic(); return "taplock -> " + PurifierUi.ForceTapLocked; }
+            if (line.StartsWith("dev=")) return PurifierUi.ToggleDevPublic(int.Parse(line.Substring(4)));
+            if (line == "dev?") return PurifierUi.DevStatePublic();
             if (line.StartsWith("pre=")) return PurifierUi.SetUiPublic("pre", int.Parse(line.Substring(4)));
             if (line.StartsWith("post=")) return PurifierUi.SetUiPublic("post", int.Parse(line.Substring(5)));
             if (line.StartsWith("mode=")) return PurifierUi.SetUiPublic("mode", int.Parse(line.Substring(5)));
@@ -164,6 +167,21 @@ namespace WaterCalcMod
             if (line == "win=detail") return PurifierUi.OpenDetailPublic();
             if (line == "win=slim") return PurifierUi.OpenSlimPublic();
             if (line.StartsWith("page=")) return PurifierUi.PagePublic(int.Parse(line.Substring(5)));
+            if (line == "mixpage") return PurifierUi.MixPagePublic();
+            if (line == "mixtext") return PurifierUi.MixTextPublic();
+            if (line == "detailtext") return PurifierUi.DetailTextPublic();
+            if (line.StartsWith("shot=")) return PurifierUi.ShotPublic(line.Substring(5));
+            if (line == "rect?") return PurifierUi.RectPublic();
+            if (line == "calc?") return PurifierUi.CalcStatePublic2();
+            if (line == "ui?") return PurifierUi.StateOneLine();
+            if (line.StartsWith("press=")) return PurifierUi.PressPublic(line.Substring(6));
+            if (line == "calcmodes?") return PurifierUi.CalcModesPublic();
+            if (line.StartsWith("cmode=")) { PurifierUi.SetCalcModePublic(int.Parse(line.Substring(6))); return PurifierUi.CalcStatePublic2(); }
+            if (line.StartsWith("ctools=")) { PurifierUi.SetCalcToolsPublic(int.Parse(line.Substring(7))); return PurifierUi.CalcStatePublic2(); }
+            if (line == "calc=clear") return PurifierUi.CalcClearPublic();
+            if (line == "unsel") return PurifierUi.DeselectPairPublic();
+            if (line.StartsWith("sel=")) return PurifierUi.SelectPairPublic(line.Substring(4));
+            if (line.StartsWith("calc=")) return PurifierUi.CalcLoadPublic(line.Substring(5));
             if (line == "cfg") { PurifierUi.OpenSettings(); return "cfg -> ok"; }
             if (line == "srcwin") { PurifierUi.OpenSourcePicker(); return "srcwin -> ok"; }
             if (line == "steps") { PurifierUi.OpenSteps(); return "steps -> ok"; }

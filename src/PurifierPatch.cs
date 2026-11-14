@@ -13,21 +13,9 @@ namespace WaterCalcMod
     {
         private static void Postfix(RichTextBuilder __0, GameItem __1)
         {
-            try
-            {
-                if (__1 == null) return;
-                PurifierUi.LogTip(__1);                      // 无条件：证明 postfix 真的进来了
-                if (__0 == null) return;
-                if (__1.identifier != "water_purifier") return;
-                string line = PurifierUi.TooltipLine(__1);
-                if (string.IsNullOrEmpty(line)) return;
-                __0.AddLine(line, true, (RenderHandler.ColorPalette)12092762,
-                    false, false, false, false,
-                    (RenderHandler.ColorPalette)(-1),
-                    (RenderHandler.ColorPalette)(-1),
-                    (RenderHandler.ColorPalette)(-1));
-            }
-            catch (Exception) { }
+            // 玩家 2026-11-11 定案：净水器物品标签上不加任何模组文案
+            // （原「净水助手：今晚 → 99.01%（留 2036 mL）」那行已删）。补丁保留但什么都不做。
+            return;
         }
     }
 }

@@ -29,13 +29,18 @@ namespace WaterCalcMod
         /// <summary>每页标题（书页上方那行小字）。</summary>
         private static readonly string[] PageTitles =
         {
-            "一 · 前期 2 L 瓶",
-            "二 · 中期 6 L 桶",
-            "三 · 后期 海德拉",
-            "四 · 上限与耗材",
-            "五 · 顺序",
-            "六 · 水商利润"
+            "一 · 使用说明书",
+            "二 · 前期 2 L 瓶",
+            "三 · 中期 6 L 桶",
+            "四 · 后期 海德拉",
+            "五 · 上限与耗材",
+            "六 · 顺序",
+            "七 · 水商利润"
         };
+
+        // 玩家 2026-11-13：手册第一页要放「使用说明」，原来它在第 7 页。
+        // 这里只改手册的页序，不动配方窗（配方窗还是 1..6 的技术页）。
+        private static readonly int[] PageOrder = { 7, 1, 2, 3, 4, 5, 6 };
 
         /// <summary>正文：直接复用配方窗的分页文本，保证两边数字一致。</summary>
         /// <remarks>
@@ -56,7 +61,8 @@ namespace WaterCalcMod
                 string body = null;
                 try
                 {
-                    var lines = PurifierUi.RecipePage(i + 1);
+                    int src = (i < PageOrder.Length) ? PageOrder[i] : (i + 1);
+                    var lines = PurifierUi.RecipePage(src);
                         if (lines != null && lines.Length > 0) body = string.Join("\n", lines);
                     }
                 catch (Exception e) { Log("页 " + (i + 1) + " 生成失败 " + e.GetType().Name); }
@@ -223,6 +229,7 @@ namespace WaterCalcMod
 
                 object cur = GameBridge.Get(pum, "currentBook");
                 object panel = GameBridge.Get(pum, "bookPanel");
+                CenterBookPanel(panel);
                 int fontN = FixFonts(panel);
 #if DEV
                 Log("[book] fonts " + sw.ElapsedMilliseconds + "ms n=" + fontN);
@@ -244,6 +251,115 @@ namespace WaterCalcMod
             }
         }
 
+
+        private static UnityEngine.RectTransform centerRt;
+        private static int centerFrames;
+
+        /// <summary>原生书页默认会靠边停靠；按面板中心与屏幕中心的差值挪回正中。</summary>
+        private static void CenterBookPanel(object panel)
+        {
+            try
+            {
+                UnityEngine.GameObject go = panel as UnityEngine.GameObject;
+                if (go == null && panel is UnityEngine.Component) go = ((UnityEngine.Component)panel).gameObject;
+                if (go == null) return;
+                var rt = go.transform as UnityEngine.RectTransform;
+                if (rt == null) return;
+                centerRt = rt;
+                centerFrames = 20;
+                CenterRt(rt, go.name);
+            }
+            catch (Exception e) { Log("center ERR " + e.GetType().Name); }
+        }
+
+        /// <summary>书窗布局晚一帧才定，前面 20 帧每帧补一次，避免只算一次后还偏上/偏左。</summary>
+        public static void Tick()
+        {
+            if (centerRt == null || centerFrames <= 0) return;
+            centerFrames--;
+            try { CenterRt(centerRt, "tick"); } catch (Exception) { }
+        }
+
+        private static void CenterRt(UnityEngine.RectTransform rt, string tag)
+        {
+            if (rt == null) return;
+            var canvas = rt.GetComponentInParent<UnityEngine.Canvas>();
+            UnityEngine.Camera cam = null;
+            float scale = 1f;
+            if (canvas != null)
+            {
+                if (canvas.renderMode != UnityEngine.RenderMode.ScreenSpaceOverlay) cam = canvas.worldCamera;
+                scale = canvas.scaleFactor <= 0f ? 1f : canvas.scaleFactor;
+            }
+            UnityEngine.Vector3[] corners = new UnityEngine.Vector3[4];
+            rt.GetWorldCorners(corners);
+            UnityEngine.Vector3 mid = (corners[0] + corners[2]) * 0.5f;
+            UnityEngine.Vector2 sp = UnityEngine.RectTransformUtility.WorldToScreenPoint(cam, mid);
+            float dx = UnityEngine.Screen.width * 0.5f - sp.x;
+            float dy = UnityEngine.Screen.height * 0.5f - sp.y;
+            if (Math.Abs(dx) >= 1f || Math.Abs(dy) >= 1f)
+            {
+                rt.position = rt.position + new UnityEngine.Vector3(dx / scale, dy / scale, 0f);
+                Log("center " + tag + " d=" + dx.ToString("0") + "," + dy.ToString("0") + " scale=" + scale.ToString("0.00"));
+            }
+            // 玩家 2026-11-13（第三次提）：窗口居中了，页里的字却贴着左边、右边一大片空白。
+            // 把 title/subtitle/body/signature 这几块文字各自对齐到书页中心线（不碰字号与行距）。
+            float cdx = AlignContent(rt, cam, scale);
+            if (Math.Abs(dx) < 1f && Math.Abs(dy) < 1f && cdx < 1f) centerFrames = 0;
+        }
+
+        /// <summary>把书页里的几块文字按「块中心 = 书页中心」横向对正；返回最大位移（屏幕像素）。</summary>
+        private static float AlignContent(UnityEngine.RectTransform root, UnityEngine.Camera cam, float scale)
+        {
+            float maxDx = 0f;
+            try
+            {
+                UnityEngine.Vector3[] pc = new UnityEngine.Vector3[4];
+                root.GetWorldCorners(pc);
+                UnityEngine.Vector2 pmid = UnityEngine.RectTransformUtility.WorldToScreenPoint(cam, (pc[0] + pc[2]) * 0.5f);
+                float pageW = Math.Abs(pc[2].x - pc[0].x) / Math.Max(0.0001f, scale);
+                foreach (string nm in new string[] { "title", "subtitle", "body", "signature" })
+                {
+                    UnityEngine.RectTransform ch = root.Find(nm) as UnityEngine.RectTransform;
+                    if (ch == null) continue;
+                    // 玩家 2026-11-13（第三次）：body 的 RectTransform 是整页宽，文字却在里面左对齐，
+                    // 所以只挪 rect 不会动字。这里把 body 的宽度收到「文字实际宽度」，再整体居中。
+                    if (nm == "body") FitBodyWidth(ch, pageW);
+                    UnityEngine.Vector3[] cc = new UnityEngine.Vector3[4];
+                    ch.GetWorldCorners(cc);
+                    UnityEngine.Vector2 cmid = UnityEngine.RectTransformUtility.WorldToScreenPoint(cam, (cc[0] + cc[2]) * 0.5f);
+                    float dx = pmid.x - cmid.x;
+                    if (Math.Abs(dx) < 1f) continue;
+                    ch.position = ch.position + new UnityEngine.Vector3(dx / scale, 0f, 0f);
+                    if (Math.Abs(dx) > Math.Abs(maxDx)) maxDx = dx;
+                }
+            }
+            catch (Exception e) { Log("aligncontent ERR " + e.GetType().Name); }
+            return Math.Abs(maxDx);
+        }
+
+        /// <summary>玩家 2026-11-13（第六轮）定案：手册正文**左对齐**，窗口本身居中就够了；
+        /// 之前把它设成 Center 反而每行都缩进、看着散。这里强制回 Left。</summary>
+        private static void FitBodyWidth(UnityEngine.RectTransform bodyRt, float pageW)
+        {
+            try
+            {
+                // 批次 30 过检测：原来用 tmp.GetType().GetProperty("horizontalAlignment")，
+                // 计算类型 = reflection-external。TMP 就在编译期引用里，直接强类型读枚举即可。
+                var comps = bodyRt.GetComponents<TMPro.TextMeshProUGUI>();
+                for (int i = 0; i < comps.Length; i++)
+                {
+                    var tmp = comps[i];
+                    if (tmp == null) continue;
+                    if (tmp.horizontalAlignment == TMPro.HorizontalAlignmentOptions.Left) return;
+                    string curName = tmp.horizontalAlignment.ToString();
+                    tmp.horizontalAlignment = TMPro.HorizontalAlignmentOptions.Left;
+                    Log("body align " + curName + " -> Left");
+                    return;
+                }
+            }
+            catch (Exception e) { Log("fitbody ERR " + e.GetType().Name); }
+        }
 
         private static UnityEngine.Font osFont = null;
         private static string lastFontName = "";

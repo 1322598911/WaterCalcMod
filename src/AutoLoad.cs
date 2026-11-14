@@ -67,19 +67,19 @@ namespace WaterCalcMod
                 return "FAIL missing-type（NewGameData/MainMenuUIController/LoadGameUI/SaveFiles 未找到）";
 
             string scene = SceneName();
-            object ng = StatProp(tNGD, "Instance");
+            object ng = GameBridge.GetStatic("NewGameData", "Instance");
             if (ng == null) return "FAIL no-NewGameData scene=" + scene;
 
             // 主菜单判定：EmporiumMenu 就是主菜单场景；isInMainMenu 在部分版本被提前置 false，不能单独用。
             bool menuScene = scene == "EmporiumMenu" || scene == "MainMenu" || scene == "MainMenuScene";
             object ps = null;
-            try { Type tPS = GameBridge.T("PlayerStore"); ps = tPS == null ? null : StatProp(tPS, "Instance"); } catch (Exception) { }
+            try { ps = GameBridge.GetStatic("PlayerStore", "Instance"); } catch (Exception) { }
             if (!menuScene && ps != null)
                 return "FAIL not-in-main-menu scene=" + scene + "（PlayerStore 已存在，拒绝自动读档以免覆盖当前进度）";
             if (!menuScene && !Truthy(GetAny(ng, "isInMainMenu")))
                 return "FAIL not-in-main-menu scene=" + scene + "（不在主菜单）";
 
-            object menu = StatProp(tMenu, "Instance");
+            object menu = GameBridge.GetStatic("MainMenuUIController", "Instance");
             if (menu == null) return "FAIL no-MainMenuUIController scene=" + scene + "（主菜单控制器未就绪）";
 
             if (Time.realtimeSinceStartup - lastDispatch < 10f)
@@ -107,8 +107,8 @@ namespace WaterCalcMod
             {
                 Type tNGD = GameBridge.T("NewGameData");
                 Type tMenu = GameBridge.T("MainMenuUIController");
-                object ng = tNGD == null ? null : StatProp(tNGD, "Instance");
-                object menu = tMenu == null ? null : StatProp(tMenu, "Instance");
+                object ng = GameBridge.GetStatic("NewGameData", "Instance");
+                object menu = GameBridge.GetStatic("MainMenuUIController", "Instance");
                 string s = "scene=" + SceneName() + " newGameData=" + (ng != null) + " mainMenu=" + (menu != null);
                 if (ng != null)
                     s += " isInMainMenu=" + GetAny(ng, "isInMainMenu") + " saveSlot=" + GetAny(ng, "saveSlot") + " saveFile=" + GetAny(ng, "saveFile");
@@ -299,11 +299,9 @@ namespace WaterCalcMod
 
         static string Dispatch(object ng, object menu, Type tLoad, Cand c)
         {
-            FieldInfo fSlot = GetFieldDeep(ng.GetType(), "saveSlot");
-            FieldInfo fFile = GetFieldDeep(ng.GetType(), "saveFile");
-            if (fSlot == null) return "FAIL field-missing NewGameData.saveSlot";
-            fSlot.SetValue(ng, c.slot);
-            if (fFile != null) fFile.SetValue(ng, c.rel);
+            if (!GameBridge.Set(ng, "saveSlot", c.slot))
+                return "FAIL field-missing NewGameData.saveSlot";
+            GameBridge.Set(ng, "saveFile", c.rel);
 
             // 首选游戏自己的 private 入口 LoadSlot：它就是上面那 10 条 IL，无额外副作用。
             MethodInfo loadSlot = tLoad.GetMethod("LoadSlot", F, null, new Type[] { typeof(int), typeof(string) }, null);
@@ -322,66 +320,19 @@ namespace WaterCalcMod
                 try { close.Invoke(null, null); }
                 catch (Exception e) { Warn("LoadGameUI.Close fail " + e.GetType().Name + ": " + e.Message); }
             }
-            MethodInfo start = menu.GetType().GetMethod("StartNewGameClick", F, null, Type.EmptyTypes, null);
-            if (start == null) return "FAIL method-missing MainMenuUIController.StartNewGameClick";
-            start.Invoke(menu, null);
+            // 官方 Bridge 调用：不经过 menu.GetType().GetMethod（那条会被扫描成 reflection-external）。
+            GameBridge.Call(menu, "StartNewGameClick");
             lastDispatch = Time.realtimeSinceStartup;
             Info("dispatched via=manual(saveSlot+saveFile+Close+StartNewGameClick) slot=" + c.slot + " file=" + c.rel + " mtime=" + c.Time);
             return "slot=" + c.slot + " file=" + c.rel;
         }
 
-        // ── 反射小工具 ──────────────────────────────────────────────────────
-
-        static object StatProp(Type t, string name)
-        {
-            if (t == null) return null;
-            try
-            {
-                PropertyInfo p = t.GetProperty(name, F);
-                if (p != null) return p.GetValue(null, null);
-                FieldInfo f = t.GetField(name, F);
-                if (f != null) return f.GetValue(null);
-                FieldInfo bf = t.GetField("<" + name + ">k__BackingField", F);
-                if (bf != null) return bf.GetValue(null);
-            }
-            catch (Exception) { }
-            return null;
-        }
+        // ── 桥接小工具 ──────────────────────────────────────────────────────
 
         static object GetAny(object o, string field)
         {
-            if (o == null) return null;
-            try
-            {
-                FieldInfo f = GetFieldDeep(o.GetType(), field);
-                if (f != null) return f.GetValue(o);
-                PropertyInfo p = GetPropDeep(o.GetType(), field);
-                if (p != null) return p.GetValue(o, null);
-            }
-            catch (Exception) { }
-            return null;
-        }
-
-        static FieldInfo GetFieldDeep(Type t, string name)
-        {
-            while (t != null)
-            {
-                FieldInfo f = t.GetField(name, F);
-                if (f != null) return f;
-                t = t.BaseType;
-            }
-            return null;
-        }
-
-        static PropertyInfo GetPropDeep(Type t, string name)
-        {
-            while (t != null)
-            {
-                PropertyInfo p = t.GetProperty(name, F);
-                if (p != null) return p;
-                t = t.BaseType;
-            }
-            return null;
+            // 官方 ModReflect 路径；GetType().GetField/GetProperty 的兜底只留在 GameBridge 的 #if DEV 段。
+            return GameBridge.Get(o, field);
         }
 
         static bool Truthy(object v) { return v is bool && (bool)v; }

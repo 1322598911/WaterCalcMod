@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace WaterCalcMod
@@ -12,6 +12,10 @@ namespace WaterCalcMod
     {
         /// <summary>方案排序偏好：true=省耗材优先（宁愿多倒水），false=少倒水优先（可用药片/耗材）。</summary>
         public static bool PreferNoConsumable = true;
+
+        /// <summary>前置里选了带药片的组合（药片+紫外/过滤棉）时，药片先于过滤棉/紫外结算。
+        /// 由 WaterPlan 按当前前置写入；默认 false = 网页的老顺序（过滤/紫外 → 过夜 → 药片）。</summary>
+        public static bool TabletsFirst = false;
 
         /// <summary>过滤棉可用总耐久（由 WaterPlan.FilterDur 写入，= 玩家选用的那几块滤棉的实际耐久和）。
         /// 离线对拍脚本自己设它。</summary>
@@ -103,9 +107,11 @@ namespace WaterCalcMod
         //   水的量已 ≥ target → 直接返回（洗不了，本来就更干净）
         //   保留 chemical_contaminant / heavy_metal 两项的量，其余四项按比例清掉；
         //   四项不够清时继续按比例清化学与重金属。总量不变 → 纯度正好 98.00%。
-        // 耐久：1 点 = 100 mL，满耐久 330 点 = 33 L，超过 33 L 用不了（玩家实测口径）。
+        // 耐久：1 点 = 100 mL；单只满耐久 300 点（30 L、325 元）。
+        // 超出单只时按「多只叠加」处理（玩家 2026-11-11 定案）：买 N 只分批洗，
+        // 每批都洗成 98.00%，合计与一次洗完等价（30 L→29.4 L、14 L→13.72 L，合计 43.12 L 即 44 L 的 98%）。
         public const long HYDRA_UL_PER_DUR = 100000;   // 每点耐久处理 100 mL
-        public const int HYDRA_MAX_DUR = 300;          // 玩家实测：整只 300 耐久、325 元 → 最多 30 L
+        public const int HYDRA_MAX_DUR = 300;          // 单只满耐久（玩家实测：300 点 / 325 元）；总量可高于此值
         public const int HYDRA_BASE_BP = 9800;         // 出水分 98.00%
 
         private static readonly string[] AllKeys = { "heavy", "organic", "microbe", "chemical", "physical", "mineral" };
@@ -125,7 +131,9 @@ namespace WaterCalcMod
         {
             if (w == null || w.v <= 0) return 0;
             int dur = HydraDurability(w);
-            if (dur <= 0 || dur > HYDRA_MAX_DUR) return 0;          // 超过 33 L 一次洗不完
+            // 单只满耐久 300 点，但可以买多只分批洗：这里不再按单只上限拒绝，
+            // 消耗的耐久 dur 超过 300 时由成本模型按「ceil(dur/300) 只」折算（玩家 2026-11-11 定案）。
+            if (dur <= 0) return 0;
             long target = (w.v * HYDRA_BASE_BP + 9999L) / 10000L;    // 水的目标量
             if (w.WaterPart >= target) return 0;                      // 已经比基础水更纯
             long allowedImp = w.v - target;
@@ -410,6 +418,9 @@ namespace WaterCalcMod
             if (rounds < 1) rounds = 1;
             var w = Build(feed, purity, containerCap);
             var p = new Plan();
+            // 前置选了「药片+…」时，药片先下：15 mL 氯先参与体积/化学，再走过滤棉/紫外。
+            // 未选时保持网页老顺序：过滤/紫外 → 过夜 → 药片。
+            if (TabletsFirst && tablets > 0) Tablet(w, tablets);
             if (useFilter) p.filterUsed = Filter(w, FilterBudget);
             if (useUv) Uv(w, Math.Max(1, (int)Math.Ceiling(feed / 3000000.0)));
             int used = 0;
@@ -421,7 +432,7 @@ namespace WaterCalcMod
                 if (removed <= 0) break;
                 used = rd + 1;
             }
-            if (tablets > 0) Tablet(w, tablets);   // 回退：不再用机器上限截断（玩家：别为了 99 质量降低收益）
+            if (tablets > 0 && !TabletsFirst) Tablet(w, tablets);   // 老顺序：药片最后放
             p.feed = feed;
             p.output = w.v;
             p.purity = w.Purity;
@@ -462,6 +473,7 @@ namespace WaterCalcMod
                         {
                             var w = w0.Clone();
                             int fu = 0;
+                            if (TabletsFirst && t > 0) Tablet(w, t);
                             if (f == 1) fu = Filter(w, durability);
                             if (u == 1) Uv(w, 1);
                             for (int i = 0; i < n; i++)
@@ -469,7 +481,7 @@ namespace WaterCalcMod
                                 long cut = Purify(w, perf, quality);
                                 if (cut <= 0) break;
                             }
-                            if (t > 0) Tablet(w, t);
+                            if (t > 0 && !TabletsFirst) Tablet(w, t);
                             if (w.Purity < targetBp) continue;
                             int cost = f + u + t;
                             if (best == null || w.v > best.outUl ||

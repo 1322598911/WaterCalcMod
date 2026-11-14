@@ -98,5 +98,16 @@ namespace WaterCalcMod
             catch (Exception) { }
             return Input.GetKeyDown(key);
         }
+
+        /// <summary>ctl 诊断：键名、游戏是否在压制热键、当前帧是否按下。</summary>
+        public static string Diag()
+        {
+            bool sup = false; string err = "";
+            try { sup = KeyBindHelper.SuppressHotkeys; } catch (Exception e) { err = e.GetType().Name + ":" + e.Message; }
+            bool down = false;
+            try { down = Input.GetKeyDown(key); } catch (Exception) { }
+            return "key=" + KeyName + " code=" + key + " suppressed=" + sup
+                 + (err.Length > 0 ? " err=" + err : "") + " downNow=" + down;
+        }
     }
 }
