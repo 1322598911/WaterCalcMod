@@ -2,9 +2,9 @@
 <Manifest>
   <ID>watercalc_assistant</ID>
   <Name>净水助手</Name>
-  <Author>dsh</Author>
-  <ModVersion>0.3.1</ModVersion>
-  <Description>净水助手</Description>
+  <Author>qixian</Author>
+  <ModVersion>1.0</ModVersion>
+  <Description>净水计算助手：接多少水、上限多少、几片药几份棉、一晚/多晚出多少与纯度、成本收益</Description>
   <GameVersions>
     <Version>0.46</Version>
   </GameVersions>
