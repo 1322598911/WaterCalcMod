@@ -347,23 +347,27 @@ namespace WaterCalcMod
         /// <summary>发布版入口故障专用旁路：不经过 ModLoader 日志，直接确认 Update/F10/按钮是否执行。</summary>
         internal static void TraceEntry(string s)
         {
+#if DEV
             try
             {
                 System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "watercalc-ui-entry.log"),
                     System.DateTime.Now.ToString("HH:mm:ss.fff") + " " + s + "\r\n");
             }
             catch (Exception) { }
+#endif
         }
 
         /// <summary>接水诊断：发布版 Log 被关闭时，仍然把 OnFill 的真实目标/方案量写出来。</summary>
         private static void PourDiag(string s)
         {
+#if DEV
             try
             {
                 System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "watercalc-pour.log"),
                     System.DateTime.Now.ToString("HH:mm:ss.fff") + " " + s + "\r\n");
             }
             catch (Exception) { }
+#endif
         }
 
         /// <summary>窗口 → 这台机器自己的储水容器槽（同一窗口重复进只更新槽）。</summary>
@@ -3458,6 +3462,7 @@ namespace WaterCalcMod
         /// <summary>联调用：游戏自己截一张图（不经过桌面控制），用来核对混水页/详情页的真实排版。</summary>
         public static string ShotPublic(string name)
         {
+#if DEV
             try
             {
                 if (string.IsNullOrEmpty(name)) name = "shot";
@@ -3469,6 +3474,9 @@ namespace WaterCalcMod
                 return "shot -> " + path;
             }
             catch (Exception e) { return "shot -> ERR " + e.GetType().Name + " " + e.Message; }
+#else
+            return "shot -> release-disabled";
+#endif
         }
 
         /// <summary>联调用：把混水页当前要显示的文字原样打出来（查有没有 hex 标签、有没有多余行）。</summary>
