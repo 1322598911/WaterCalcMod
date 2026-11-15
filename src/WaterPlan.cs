@@ -22,6 +22,9 @@ namespace WaterCalcMod
         // 玩家 2026-11-10 定案：原料水是水管水，免费，**不计入成本**；成本只有耗材 + 电。
         public const int TabletCost = 6;
         public const int FilterCost = 25;
+        /// <summary>药片影子价（元/片）：只在性价比自动档、同进水量/同晚数之间比较时生效。
+        /// 0 = 关闭；由界面按库存写入（1 片 15 / 2–3 片 10 / ≥4 或无限 6）。</summary>
+        public static double TabletShadow = 0.0;
         /// <summary>一块过滤棉的耐久点数（**成本折算基准**：一块 400 点 ≈ 25 元）。</summary>
         public const int FilterDurPer = 400;
         /// <summary>规划时可用的过滤棉总耐久：由界面按背包里**实际持有**的滤棉累加后写进来
@@ -1406,6 +1409,23 @@ namespace WaterCalcMod
                     else if (c.purityBp == best.purityBp && c.outUl == best.outUl && RankCost(c) < RankCost(best)) best = c;
                 }
             }
+            // 玩家 2026-11-15：性价比自动档在「同进水量、同晚数」里按药片影子价再选一次。
+            // 只影响选方案，不改任何成本/纯度/水量公式；跨售价档且原方案现金更高时保留原档。
+            if (mode == 2 && TabletShadow > 0 && best != null)
+            {
+                double bestScore = ProfitOf(best) - TabletShadow * best.tablets;
+                foreach (var c in src)
+                {
+                    if (c == null || !c.ok) continue;
+                    if (c.feedUl != best.feedUl || c.nights != best.nights) continue;
+                    double score = ProfitOf(c) - TabletShadow * c.tablets;
+                    if (score <= bestScore + 1e-9) continue;
+                    if (WaterEconomy.Index(c.purityBp) != WaterEconomy.Index(best.purityBp)
+                        && ProfitOf(c) < ProfitOf(best)) continue;
+                    best = c;
+                    bestScore = score;
+                }
+            }
             r.pick = best;
             // 选中方案可能比「什么都不放」那晚多接（后置药片能补最后一点脏度）：
             // 卡一与状态行报的是这条方案真能接的量，所以把 bestUl 顶上去，别让 1850 把 2011 压住。
@@ -1636,8 +1656,10 @@ namespace WaterCalcMod
                             // 2026-11-13：机器路径的方案至少跑一晚；以前 new Combo 后没写 nights，
                             // 默认 0，主页 StepChain 就跳过「1 晚」，玩家只看到「滤棉/紫外/药」。
                             c.nights = p.nights > 0 ? p.nights : 1;
+                            // 玩家 2026-11-15：电费按**实际晚数**计，不能两晚只收一晚电费。
+                            // 这个少收会让 2 晚方案在性价比档里虚高，正好和主页 AutoSolve 的口径对不上。
                             c.cost = t * TabletCost + (c.filter ? (p.filterUsed / (double)FilterDurPer) * FilterCost : 0) +
-                                     EnergyCostPerNight;
+                                     EnergyCostPerNight * c.nights;
                             r.combos.Add(c);
                         }
 

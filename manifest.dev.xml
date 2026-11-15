@@ -3,7 +3,7 @@
   <ID>watercalc_assistant</ID>
   <Name>净水助手</Name>
   <Author>qixian</Author>
-  <ModVersion>1.0</ModVersion>
+  <ModVersion>1.0.2</ModVersion>
   <Description>净水计算助手（开发版：写 log.txt、ctl 探针可用）</Description>
   <GameVersions>
     <Version>0.46</Version>

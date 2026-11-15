@@ -3,8 +3,8 @@
   <ID>watercalc_assistant</ID>
   <Name>净水助手</Name>
   <Author>qixian</Author>
-  <ModVersion>1.0</ModVersion>
-  <Description>净水计算助手：接多少水、上限多少、几片药几份棉、一晚/多晚出多少与纯度、成本收益</Description>
+  <ModVersion>1.0.2</ModVersion>
+  <Description>净水计算助手：药片按库存影子价选0/加片，主页/混水统一，一晚优先、两晚兜底，成本按实际晚数计</Description>
   <GameVersions>
     <Version>0.46</Version>
   </GameVersions>

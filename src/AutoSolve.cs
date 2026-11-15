@@ -42,6 +42,9 @@ namespace WaterCalcMod
         public static long LastSearchMs = 0;
         // -1 = 自动，不限制；0 = 不放药片；N = 总片数必须正好 N
         public static int TabletTarget = -1;
+        /// <summary>药片影子价（元/片）：自动档用来衡量“这片药留着以后用”的价值。
+        /// 0 = 不启用；只在 TabletTarget = -1 且性价比自动档时由界面写入。</summary>
+        public static double TabletShadow = 0.0;
 
         /// <summary>批次 28 的界面口径：海德拉 325/300、电 1.5/晚。对照脚本不要调用。</summary>
         public static void UseUiCost()
@@ -302,6 +305,31 @@ namespace WaterCalcMod
             return r;
         }
 
+        /// <summary>毛收入 − 耗材 − 电费（不含药片影子价）。</summary>
+        private static double Net(Result r)
+        {
+            if (r == null) return double.MinValue;
+            return r.revenue - r.cost - ElectricityPerNight * r.nights;
+        }
+
+        /// <summary>净赚 − 药片影子价；只用于同一进水量下的药片档比较。</summary>
+        private static double ShadowScore(Result r)
+        {
+            if (r == null) return double.MinValue;
+            return Net(r) - TabletShadow * r.tablets;
+        }
+
+        private static bool BetterShadow(Result a, Result b)
+        {
+            if (a == null) return false;
+            if (b == null) return true;
+            double sa = ShadowScore(a), sb = ShadowScore(b);
+            if (sa != sb) return sa > sb;
+            if (a.w.v != b.w.v) return a.w.v > b.w.v;
+            if (a.nights != b.nights) return a.nights < b.nights;
+            return a.tablets < b.tablets;
+        }
+
         /// <summary>
         /// 自动方案入口。nightCap ≤ 0 表示不限制；tabletStock &lt; 0 表示不限；filterDurMax ≤ 0 表示不限。
         /// </summary>
@@ -372,6 +400,11 @@ namespace WaterCalcMod
             Node best = start;
             Node hit = null;
             Node display = null;
+            Node zeroNode = null;
+            // 玩家 2026-11-15：目标已经由 0 片方案达标时，旧搜索会在 hit 后提前停，
+            // 导致主页永远看不到「同进水量、同晚数、加片更赚」的候选；这里单独收集药片档，
+            // 只在性价比自动档（TabletShadow>0、库存有限、TabletTarget=-1）参与影子价比较。
+            var shadowCands = new List<Node>();
             int hitDepth = -1;
             int stagnant = 0;
 
@@ -404,6 +437,13 @@ namespace WaterCalcMod
                 {
                     var c = cands[i];
                     if (!TabletCountOk(c)) continue;
+                    if (c.tablets == 0 && c.w.Purity >= targetBp
+                        && (zeroNode == null || Better(c, zeroNode, capPct, pureMode)))
+                        zeroNode = c;
+                    if (TabletShadow > 0 && TabletTarget < 0 && c.tablets > 0
+                        && c.w.Purity >= targetBp && TabletCountOk(c)
+                        && shadowCands.Count < 200)
+                        shadowCands.Add(c);
                     if (c.p < 99.0) continue;
                     if (c.w.Purity < targetBp) continue;
                     if (display == null
@@ -465,6 +505,35 @@ namespace WaterCalcMod
             Node finalNode = (pureMode && display != null) ? display : best;
             var result = BuildResult(finalNode, targetBp);
             result.feedUl = start.w.v;
+            // 玩家 2026-11-15：性价比自动档按库存影子价比较“同进水量、同晚数”的 0 片档。
+            // 旧逻辑只在 finalNode 已经带药片时才比较；若 0 片已达标，搜索会提前停在 0 片，
+            // 主页因此看不到“加片更赚”的候选。现在把同晚数的药片候选一并纳入影子价比较。
+            if (TabletShadow > 0 && TabletTarget < 0 && zeroNode != null)
+            {
+                var zero = BuildResult(zeroNode, targetBp);
+                zero.feedUl = result.feedUl;
+                if (result.tablets > 0)
+                {
+                    bool crossTier0 = result.grade != zero.grade && Net(result) > Net(zero);
+                    if (!crossTier0 && BetterShadow(zero, result)) result = zero;
+                }
+                else if (zeroNode.nights == result.nights || zeroNode.nights == 0)
+                {
+                    Result bestT = null;
+                    for (int i = 0; i < shadowCands.Count; i++)
+                    {
+                        var c = shadowCands[i];
+                        if (c == null || c.tablets <= 0 || c.nights != zeroNode.nights) continue;
+                        var t = BuildResult(c, targetBp);
+                        t.feedUl = result.feedUl;
+                        bool crossTier = t.grade != zero.grade && Net(t) > Net(zero);
+                        if (!crossTier && !BetterShadow(t, zero)) continue;
+                        if (bestT == null || BetterShadow(t, bestT)
+                            || (t.grade != zero.grade && Net(t) > Net(bestT))) bestT = t;
+                    }
+                    if (bestT != null) result = bestT;
+                }
+            }
             return result;
         }
 

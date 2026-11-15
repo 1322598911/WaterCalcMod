@@ -41,6 +41,7 @@ namespace WaterCalcMod
             DropPlanCache();
             RefreshModeDesc();
             InvalidateCalc();
+            RefreshMixIfOpen();
         }
 
         /// <summary>玩家 2026-11-14 定案：标题栏图标固定「性价比 / 效率」两个词。
@@ -128,6 +129,7 @@ namespace WaterCalcMod
         private static ScrollableRichTextElement detailTxt;
         private static ScrollableRichTextElement pMixList;
         private static int mixPageH = 190;   // 混水页高度按内容收（跟主页一样矮）
+        private static string lastMixMachineKey = "";
         private static ScrollableRichTextElement recipeTxt;
         private static PixelWindow recipeWin;
         private static bool panelWant;
@@ -426,6 +428,7 @@ namespace WaterCalcMod
                 if (idx >= 0) SelectPair(idx);
             }
             catch (Exception) { }
+            // 保留原三态：不同档切档；同档再点＝切无限道具（玩家 2026-11-15 明确要求保留）。
             SetMode(mode);
         }
 
@@ -1019,10 +1022,11 @@ namespace WaterCalcMod
                     "1. 顺序：过滤棉 / 紫外 → 净水器过夜 → 最后药片",
                     "2. 药片提前放会先改掉配比，等于白给净水器清一部分，所以放最后",
                     "3. 紫外和过滤棉可以互换，但都必须在净水器之前",
-                    "4. 一晚清不完就多过一晚，别一次接太多",
-                    "5. 接水只能整瓶：凑不满就少接，不用量筒硬补",
-                    "6. 上限由质量决定，性能只影响一晚能清多少",
-                    "7. 本机质量 " + qq + " → 上限 " + PlanText.Pct(cap),
+                    "4. 一晚能处理完就只跑 1 晚；装不完才用 2 晚；两晚不是默认拖时间",
+                    "5. 50 L 且滤棉/海德拉足够时，2 晚可出约 49.6 L；44 L 一晚可出约 42 L，别被客人预算卡死",
+                    "6. 接水按面板目标一次灌到总量；容器/滴灌凑不出就少接，不用量筒硬补",
+                    "7. 上限由质量决定，性能只影响一晚能清多少；标题栏「效率」是 UI 模式，不是机器效率词条",
+                    "8. 本机质量 " + qq + " → 上限 " + PlanText.Pct(cap),
                 };
             }
             if (n == 7)
@@ -1031,16 +1035,16 @@ namespace WaterCalcMod
                 {
                     "# 7. 使用说明书",
                     "1. 放瓶：把空瓶放进净水器的「储水容器」槽，或先拿在手上（面板会认右击选中的那瓶）",
-                    "2. 接水：点标题栏的水滴键「接水」，只灌到本机一晚能净化的量，不要硬灌满",
+                    "2. 接水：点标题栏的水滴键「接水」，按当前方案一次灌到目标总量；装不下/一晚处理不完会自动改 2 晚",
                     "3. 前置：过滤棉 / 紫外灯二选一或都上，它们只清一部分杂质，必须在净水器之前用",
                     "4. 药片：净化后再放，每片清化学与微生物；提前放等于把药效浪费在净水器本来就能清的东西上",
-                    "5. 过夜：让净水器跑一晚（4 度电），一晚清不完就分两晚，别一次接太多",
+                    "5. 过夜：能 1 晚达标就只跑 1 晚；需要 2 晚才达标才用 2 晚，不要为了凑两晚空跑",
                     "6. 看结果：主面板看「出来 / 纯度 / 卖 / 赚」；要精确到万分数就开「净水助手」详情窗",
                     "7. 卖水：纯度跨过 98.00 / 99.00 / 99.90 才会涨价，差 0.01% 也是原价档，别白忙",
                     "8. 混水：计算页点「混水赚钱」，它按实际售价扣掉两瓶单卖的机会成本再排序，只列真赚的组合",
                     "9. 常见误区：把 98.99% 当成 99.00%（游戏是截断存档，显示四舍五入）—— 判定一律看游戏显示的两位",
                     "10. 常见误区：6 L 桶一次接满再净化，体积越大稀释越狠，往往不如小瓶分批",
-                    "11. 常见误区：药片不是越多越好，放多了会挤掉体积，按面板给的片数放",
+                    "11. 常见误区：药片不是越多越好；性价比自动档按库存影子价选 0/1/… 片——库存 1 片每片 15 元、2–3 片 10 元、4 片以上 6 元，加片必须多赚过这笔钱",
                     "12. 常见误区：混水不是「最高 + 最高」，同档水混一起常常不涨钱，反而占容器",
                 };
             }
@@ -1048,12 +1052,13 @@ namespace WaterCalcMod
             return new string[]
             {
                 "# 6. 水商利润",
-                "1. 成本 = 药片 6 + 过滤棉 25 + 电 4/台/晚",
-                "2. 每升成本 = 总成本 / 出水升数",
-                "3. 一晚方案越省，每升成本越低",
-                "4. 多过一晚只多电费，不加耗材",
-                "5. 上限越高，同样的水能卖越贵",
-                "6. 本机质量 " + qq + " → 上限 " + PlanText.Pct(cap),
+                "1. 成本 = 药片 6/片 + 过滤棉 25/400 耐 + 海德拉 325/300 耐 + 电 4 度/台/晚（约 1.5 元/晚）",
+                "2. 净赚 = 卖水收入 − 上述全成本；多过一晚就多一晚电费",
+                "3. 性价比自动档按库存给药片算影子价：库存 1 片 → 15 元/片，2–3 片 → 10 元/片，4 片以上 → 6 元/片",
+                "4. 同进水量、同晚数：比较「净赚 − 影子价 × 药片数」，0 片和加片谁高选谁",
+                "5. 0 片已达标时，加片必须多赚超过影子价才推荐；跨售价档且现金更高才优先保留原档",
+                "6. 药片/滤棉/海德拉库存不足时按真实持有；不读取客人预算，不按客人钱包砍水量",
+                "7. 本机质量 " + qq + " → 上限 " + PlanText.Pct(cap),
             };
         }
 
@@ -1453,6 +1458,14 @@ namespace WaterCalcMod
         private static string lockModeSig = "";
         private static string lockBottleSig = "";
         private static float lockedAt = -999f;
+        // 刚按过接水：只按实际混出来的这瓶水算方案，不再继续搜“还能再接多少”。
+        // 玩家 2026-11-15 报：接一次后容器里混水纯度已经变了，旧方案还按接水前的水样走，
+        // 或者又重新提示下一段接水，都会和实际这瓶水冲突。
+        // 玩家 2026-11-15：多晚默认只先推荐 2 晚；8 晚只用来算“升晚能多出多少水”的提示，
+        // 不再直接把 8 晚方案摆到主页。只有效率无限能在 2 晚装满 50 L 时才用 2 晚。
+        private const int MaxRecommendNights = 2;
+        private static bool postFillFix;
+        private static string postFillSig = "";
 
         private static string LockModeSig()
         {
@@ -1485,6 +1498,8 @@ namespace WaterCalcMod
 
         internal static void UnlockPlan(string why)
         {
+            postFillFix = false;
+            postFillSig = "";
             if (lockedReport == null) return;
             lockedReport = null;
             lockModeSig = "";
@@ -1519,7 +1534,8 @@ namespace WaterCalcMod
                    "|s" + SrcIdx + "|t" + TargetIdx + "|pre" + PreMode + "|po" + PostMode +
                    "|h" + WaterPlan.HydraMode + "|hd" + WaterPlan.HydraDuraCap +
                    "|nc" + WaterPlan.NightCap + "|inf" + (InfiniteTools ? 1 : 0) +
-                   "|fd" + FilterDurNow() + "|pk" + PurifierHook.PickedIndex + "|bv" + BottleSig();
+                   "|fd" + FilterDurNow() + "|pk" + PurifierHook.PickedIndex + "|bv" + BottleSig() +
+                   "|cm" + (calcManualSource ? 1 : 0) + "|ci" + CalcManualSig();
         }
 
         /// <summary>签名里去掉「瓶子」那一段：只有水量/水质变了时用它判「设置没动，可以慢一点重算」。</summary>
@@ -1616,6 +1632,14 @@ namespace WaterCalcMod
             long capUl = WaterHelper.GetTotalCapacity(b);
             long volUl = WaterHelper.GetTotalVolume(b);
             if (capUl <= 0) capUl = volUl;
+            // 接水后如果六项变了，只按实际这瓶水算，不再继续搜下一段接水量。
+            // 玩家手动再加/倒水会改水量，签一对不上就自动解除，回到正常推荐。
+            if (postFillFix && postFillSig != LockVolSig())
+            {
+                postFillFix = false;
+                postFillSig = "";
+            }
+            bool topUpAllowed = !postFillFix;
             int srcGrade = 0, tapPur = 0;
             try { TodaySource(out srcGrade, out tapPur); } catch (Exception) { tapPur = 0; }
             // 补进容器的水来自水龙头，不能拿瓶里现成水的纯度去补。
@@ -1636,7 +1660,7 @@ namespace WaterCalcMod
                 // 效率档按整瓶容量补满；补进去的水来自水龙头，必须按 tapFeedPur 混进去，
                 // 不能把整瓶都当成读取样水的纯度。
                 long calcVol = volUl > 0 ? volUl : capUl;
-                if (Mode == 1 && capUl > calcVol && calcVol > 0)
+                if (topUpAllowed && Mode == 1 && capUl > calcVol && calcVol > 0)
                 {
                     mixBaseW = BuildCalcManualWater(calcVol);
                     realW = MixWithTap(mixBaseW, capUl, tapFeedPur);
@@ -1654,7 +1678,7 @@ namespace WaterCalcMod
             {
                 hasReal = volUl > 0 && BuildRealWater(b, out realW) && realW != null && realW.v > 0;
                 // 机器/容器里已有水，效率档补到容量时同样是「现有水 + 水龙头水」的混合物。
-                if (hasReal && Mode == 1 && volUl > 0 && capUl > volUl)
+                if (topUpAllowed && hasReal && Mode == 1 && volUl > 0 && capUl > volUl)
                 {
                     mixBaseW = realW.Clone();
                     realW = MixWithTap(mixBaseW, capUl, tapFeedPur);
@@ -1676,18 +1700,43 @@ namespace WaterCalcMod
             // 就按整瓶容量重新搜接水量，界面再用 feed - 现有水量算出“还差多少”。
             // 满瓶也必须重搜一次：否则 50L 满瓶切到 29950/18850 这类更少水的方案时，
             // AutoSolve 会按 50L 固定水算，卡一不会给出“倒出多少”，步骤也留在 50L 方案。
-            bool efficiencyTopUp = Mode == 1 && hasReal && volUl < capUl;
+            bool efficiencyTopUp = topUpAllowed && Mode == 1 && hasReal && volUl < capUl;
             bool fullRebuild = hasReal && capUl > 0 && volUl >= capUl;
+            // 满瓶时瓶里已经是真实六项水样，不能再把纯度当成“按 Build 均匀配比”的水去搜；
+            // 否则刚按接水灌满后，主页会换出一套和灌水前完全不同的方案，反而提示倒出。
+            bool fullReal = topUpAllowed && fullRebuild && !calcManualSource && realW != null && realW.v > 0;
             // 手填六项必须按这份水样固定算，不能因为效率档没满又退回“按容量搜接水量”。
-            bool searchFromCapacity = !calcManualSource && (!hasReal || efficiencyTopUp || fullRebuild);
+            bool searchFromCapacity = topUpAllowed && !calcManualSource && (!hasReal || efficiencyTopUp || fullRebuild);
             long fixedFeedUl = calcManualSource
                 ? (Mode == 1 && capUl > (volUl > 0 ? volUl : capUl) ? capUl : (volUl > 0 ? volUl : capUl))
                 : (hasReal ? volUl : 0);
-            bool mixedTopUpNow = mixedTopUp && realW != null && realW.v > 0;
-            bool reportSearch = mixedTopUpNow ? false : searchFromCapacity;
-            long reportFeed = mixedTopUpNow ? realW.v : (reportSearch ? 0L : fixedFeedUl);
-            WaterMath.Water reportWater = mixedTopUpNow ? realW : (reportSearch ? null : realW);
-            var rep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+            bool mixedTopUpNow = topUpAllowed && mixedTopUp && realW != null && realW.v > 0;
+            bool reportSearch = (mixedTopUpNow || fullReal) ? false : searchFromCapacity;
+            long reportFeed = (mixedTopUpNow || fullReal) ? realW.v : (reportSearch ? 0L : fixedFeedUl);
+            WaterMath.Water reportWater = (mixedTopUpNow || fullReal) ? realW : (reportSearch ? null : realW);
+            WaterPlan.Report rep = null;
+            // 玩家 2026-11-15：空容器和“只接了 2000 mL”的容器要走同一套效率口径。
+            // 以前有旧水走 efficiencyTopUp 直接试满容量，空容器却走 SearchFeed 按少晚数搜，
+            // 于是 2000/50000 给 50 L 方案、0/50000 只给 44.15 L。多晚开启时空瓶也先试满瓶。
+            if (topUpAllowed && Mode == 1 && !hasReal && !calcManualSource
+                && capUl > 0 && WaterPlan.NightCap > 1)
+            {
+                try
+                {
+                    rep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+                                     false, capUl, null,
+                                     tools != null && tools.filter, tools != null && tools.uv,
+                                     InfiniteTools || ownTab > 0, allowHydra, forceHydra,
+                                     InfiniteTools ? -1 : ownTab,
+                                     InfiniteTools ? int.MaxValue : fDur,
+                                     HydraDuraMaxForSolve(InfiniteTools),
+                                     srcName, GameBridge.NameOfItem(b),
+                                     BottleSig() + "|tp" + tapFeedPur + "|emptyfull");
+                }
+                catch (Exception) { rep = null; }
+            }
+            if (rep == null)
+                rep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
                                  reportSearch,
                                  reportFeed,
                                  reportWater,
@@ -1698,29 +1747,75 @@ namespace WaterCalcMod
                                  HydraDuraMaxForSolve(InfiniteTools),
                                  srcName, GameBridge.NameOfItem(b),
                                  BottleSig() + (calcManualSource ? "|cm" + CalcManualSig() : "") +
-                                 "|tp" + tapFeedPur + "|mix" + (mixedTopUpNow ? 1 : 0));
+                                 "|tp" + tapFeedPur + "|mix" + (mixedTopUpNow ? 1 : 0)
+                                 + "|full" + (fullReal ? 1 : 0));
+
+            // 满瓶真实水样按整瓶跑不动时，走 BuildFromWater 的真实六项找“倒出多少后能跑”，
+            // 不能再用纯度均匀配比的水去搜一个假的可接量。
+            if (rep == null && fullReal && realW != null && !calcManualSource)
+            {
+                try
+                {
+                    rep = BuildMixReportLimited(realW, perf, q, targetBp, Mode,
+                                                GameBridge.NameOfItem(b), ownTab,
+                                                RecommendNightCap());
+                }
+                catch (Exception) { rep = null; }
+            }
 
             // 满容器混合后达不到目标：不要硬报一个假的「需接水 48000」，
             // 回退成只用现有这瓶水，让玩家先保住这瓶好水。
             if (rep == null && mixedTopUpNow && mixBaseW != null && mixBaseW.v > 0)
             {
-                var repBase = AutoReport(capUl, mixBaseW.Purity, perf, q, targetBp, Mode,
-                                         false, mixBaseW.v, mixBaseW,
-                                         tools != null && tools.filter, tools != null && tools.uv,
-                                         InfiniteTools || ownTab > 0, allowHydra, forceHydra,
-                                         InfiniteTools ? -1 : ownTab,
-                                         InfiniteTools ? int.MaxValue : fDur,
-                                         HydraDuraMaxForSolve(InfiniteTools),
-                                         srcName, GameBridge.NameOfItem(b),
-                                         BottleSig() + (calcManualSource ? "|cm" + CalcManualSig() : "") +
-                                         "|tp" + tapFeedPur + "|base");
-                if (repBase != null) rep = repBase;
+                // 先找“最多还能兑多少、整瓶仍达标”的部分接水方案。
+                // 1650 mL 99.01% + 2.1 mL 91.11% 这种边界，不能因为整瓶 50 L 失败就只显示当前液体。
+                if (Mode == 1 && capUl > mixBaseW.v)
+                {
+                    try
+                    {
+                        var topRep = BuildEfficiencyTopUp(mixBaseW, capUl, tapFeedPur, perf, q, targetBp,
+                                                           GameBridge.NameOfItem(b), ownTab);
+                        if (topRep != null && topRep.ok && topRep.pick != null && topRep.dumpUl <= 0
+                            && topRep.pick.nights <= MaxRecommendNights)
+                            rep = topRep;
+                    }
+                    catch (Exception) { }
+                }
+                if (rep == null && topUpAllowed)
+                {
+                    // 2 晚装不满整瓶时，不要退回 8 晚；先在 2 晚上限内搜一条
+                    // “能接多少、仍达标”的方案，主页只展示这一条，升晚提示另算。
+                    var twoRep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+                                            true, 0L, null,
+                                            tools != null && tools.filter, tools != null && tools.uv,
+                                            InfiniteTools || ownTab > 0, allowHydra, forceHydra,
+                                            InfiniteTools ? -1 : ownTab,
+                                            InfiniteTools ? int.MaxValue : fDur,
+                                            HydraDuraMaxForSolve(InfiniteTools),
+                                            srcName, GameBridge.NameOfItem(b),
+                                            BottleSig() + "|tp" + tapFeedPur + "|night2");
+                    if (twoRep != null && twoRep.ok) rep = twoRep;
+                }
+                if (rep == null)
+                {
+                    var repBase = AutoReport(capUl, mixBaseW.Purity, perf, q, targetBp, Mode,
+                                             false, mixBaseW.v, mixBaseW,
+                                             tools != null && tools.filter, tools != null && tools.uv,
+                                             InfiniteTools || ownTab > 0, allowHydra, forceHydra,
+                                             InfiniteTools ? -1 : ownTab,
+                                             InfiniteTools ? int.MaxValue : fDur,
+                                             HydraDuraMaxForSolve(InfiniteTools),
+                                             srcName, GameBridge.NameOfItem(b),
+                                             BottleSig() + (calcManualSource ? "|cm" + CalcManualSig() : "") +
+                                             "|tp" + tapFeedPur + "|base");
+                    if (repBase != null) rep = repBase;
+                }
             }
 
             // 批次 36 A：性价比档、容器没满、按现有水量固定算不出方案时，
             // 以当前水量为上界再搜一次可达水量；找到就把超出部分标成“先倒出”。
             // 只补主页这一条；计算页 AutoCalcReport 本来就有同样的降量搜索。
-            if (rep == null && !calcManualSource && !reportSearch && Mode == 2
+            if (topUpAllowed && rep == null && !calcManualSource && !reportSearch && Mode == 2
                 && hasReal && volUl > 1L && capUl > volUl)
             {
                 var reduced = AutoReport(volUl, purityBp, perf, q, targetBp, Mode,
@@ -1742,6 +1837,33 @@ namespace WaterCalcMod
                     rep = reduced;
                 }
             }
+
+            // 玩家 2026-11-15：混水页已经有「性价比再兑多少」，主页也必须用同一条方案。
+            // 性价比不再只按当前水量固定算；在容量内找一晚净赚最多的兑入量，并把这条放回主页。
+            if (topUpAllowed && Mode == 2 && !calcManualSource && hasReal && realW != null && realW.v > 0L
+                && capUl > realW.v)
+            {
+                try
+                {
+                    long bestTotal = 0;
+                    var costRep = BestCostTopUp(realW, capUl, tapFeedPur, perf, q, targetBp,
+                                                GameBridge.NameOfItem(b), ownTab, null, out bestTotal);
+                    if (costRep != null && costRep.pick != null
+                        && costRep.ChosenFeedUl() > realW.v)
+                        rep = costRep;
+                }
+                catch (Exception) { }
+            }
+
+            BuildNightUpHint(rep, capUl, purityBp, perf, q, targetBp,
+                             (mixedTopUpNow && realW != null && realW.v >= capUl) ? realW : null,
+                             tools != null && tools.filter, tools != null && tools.uv,
+                             InfiniteTools || ownTab > 0, allowHydra, forceHydra,
+                             InfiniteTools ? -1 : ownTab,
+                             InfiniteTools ? int.MaxValue : fDur,
+                             HydraDuraMaxForSolve(InfiniteTools),
+                             srcName, GameBridge.NameOfItem(b),
+                             BottleSig() + (calcManualSource ? "|cm" + CalcManualSig() : ""));
             ApplyManualPick(rep);
             return rep;
         }
@@ -1802,6 +1924,15 @@ namespace WaterCalcMod
             return w;
         }
 
+        /// <summary>按玩家实际拥有的容器凑量：50 mL 瓶只能到 1850，有 1 mL 滴灌才能到 1888。
+        /// 这里走 WaterPlan.Plan 的整瓶子集和，和计算页「需接水」同一条口径。</summary>
+        private static long ReachablePour(long wantUl, long roomUl)
+        {
+            if (wantUl <= 0) return 0;
+            long p = BottlePourUl(wantUl, roomUl > 0 ? roomUl : 0);
+            return p > 0 ? p : wantUl;
+        }
+
         /// <summary>计算页六项/水量的指纹：改了六项要作废主页方案缓存。</summary>
         private static string CalcManualSig()
         {
@@ -1816,6 +1947,81 @@ namespace WaterCalcMod
         // 步骤页/主页/计算页只读它，避免再各自模拟一遍固定顺序。
         private static readonly Dictionary<WaterPlan.Report, AutoSolve.Result> autoRawResults =
             new Dictionary<WaterPlan.Report, AutoSolve.Result>();
+
+        // 只做展示提示，不参与推荐：2 晚方案旁边告诉玩家“升到 8 晚最多多出多少水”。
+        private static readonly Dictionary<WaterPlan.Report, string> nightUpHints =
+            new Dictionary<WaterPlan.Report, string>();
+
+        private static string NightUpHintFor(WaterPlan.Report r)
+        {
+            if (r == null) return "";
+            return nightUpHints.ContainsKey(r) ? nightUpHints[r] : "";
+        }
+
+        private static void BuildNightUpHint(WaterPlan.Report r,
+                                             long capUl, int purityBp, int perf, int q, int targetBp,
+                                             WaterMath.Water fullMix,
+                                             bool allowFilter, bool allowUv, bool allowTablet,
+                                             bool allowHydra, bool forceHydra,
+                                             int ownTab, int filterDur, int hydraDura,
+                                             string srcName, string bottleName, string bottleSig)
+        {
+            if (r == null || r.pick == null) return;
+            int setting = Math.Max(1, WaterPlan.NightCap);
+            if (setting <= MaxRecommendNights || r.pick.nights >= setting) return;
+            long baseOut = r.pick.outUl;
+
+            WaterPlan.Report maxRep = null;
+            bool saveHydraHint = autoHydraHint;
+            int saveNightsMin = lastNightsMin;
+            try
+            {
+                // 能拿“现有水 + 水龙头水”的整瓶混合水，就按整瓶固定算；
+                // 否则按容量搜一次，只为算提示，不写回主页方案。
+                if (fullMix != null && fullMix.v >= capUl)
+                {
+                    maxRep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+                                        false, capUl, fullMix,
+                                        allowFilter, allowUv, allowTablet,
+                                        allowHydra, forceHydra, ownTab,
+                                        filterDur, hydraDura, srcName, bottleName,
+                                        bottleSig + "|nightmax", setting);
+                }
+                if (maxRep == null)
+                {
+                    // 用整瓶容量固定算一次：效率档会取整瓶能跑到的最大出水量；
+                    // 性价比档也会给最先可行的整瓶方案。这里只在提示里用，不写主页。
+                    maxRep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+                                        false, capUl, null,
+                                        allowFilter, allowUv, allowTablet,
+                                        allowHydra, forceHydra, ownTab,
+                                        filterDur, hydraDura, srcName, bottleName,
+                                        bottleSig + "|nightmaxf", setting);
+                }
+                if (maxRep == null)
+                {
+                    maxRep = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
+                                        true, 0L, null,
+                                        allowFilter, allowUv, allowTablet,
+                                        allowHydra, forceHydra, ownTab,
+                                        filterDur, hydraDura, srcName, bottleName,
+                                        bottleSig + "|nightmaxs", setting);
+                }
+            }
+            catch (Exception) { maxRep = null; }
+            finally
+            {
+                // 升晚提示只是旁路计算，不能改主页当前方案的海德拉提示/晚数状态。
+                autoHydraHint = saveHydraHint;
+                lastNightsMin = saveNightsMin;
+            }
+
+            if (maxRep == null || maxRep.pick == null) return;
+            if (maxRep.pick.nights <= r.pick.nights) return;
+            long gain = maxRep.pick.outUl - baseOut;
+            if (gain < 1000000L) return;
+            nightUpHints[r] = "升到 " + maxRep.pick.nights + " 晚可多出 " + WaterPlan.Ml(gain);
+        }
 
         private static AutoSolve.Result RawResultFor(WaterPlan.Report r)
         {
@@ -1838,13 +2044,82 @@ namespace WaterCalcMod
         /// 批次 28 的页面适配：AutoSolve.Result → 现有 WaterPlan.Report。
         /// 只在页面层做转换，WaterPlan / WaterMath 不碰。
         /// </summary>
+        /// <summary>主页/计算页/混水页共用：多晚开启时默认只显示最多 2 晚。</summary>
+        private static int RecommendNightCap()
+        {
+            int setting = Math.Max(1, WaterPlan.NightCap);
+            return setting > 1 ? Math.Min(setting, MaxRecommendNights) : 1;
+        }
+
+        /// <summary>药片影子价：库存越少，越不该为了小利润吃掉一片。
+        /// 0 片不启用；1 片 15 元/片；2–3 片 10；4 片以上或无限 6。</summary>
+        private static double TabletShadowForStock(int stock)
+        {
+            if (stock == 0) return 0.0;
+            if (stock == 1) return 15.0;
+            if (stock == 2 || stock == 3) return 10.0;
+            return 6.0;
+        }
+
+        /// <summary>性价比自动档：同进水量、同晚数下找一次 0 片方案，和现有方案比
+        /// “净赚 − 库存影子价”。0 片不可行就原样返回；不改变进水量/晚数上限。</summary>
+        private static AutoSolve.Result ApplyTabletShadow(AutoSolve.Result ar,
+                                                          int mode, int tabletStock,
+                                                          int purityBp, int perf, int q, int targetBp,
+                                                          WaterMath.Water realWater,
+                                                          bool allowFilter, bool allowUv,
+                                                          bool allowHydra, bool forceHydra,
+                                                          int filterDurMax, int hydraDuraMax)
+        {
+            if (ar == null || !ar.ok || mode != 2 || PostMode != 0 || ar.tablets <= 0)
+                return ar;
+            double lambda = TabletShadowForStock(tabletStock);
+            if (lambda <= 0 || ar.nights <= 0) return ar;
+
+            int oldTarget = AutoSolve.TabletTarget;
+            double oldShadow = AutoSolve.TabletShadow;
+            AutoSolve.TabletTarget = -1;
+            AutoSolve.TabletShadow = 0.0;
+            AutoSolve.Result zero = null;
+            try
+            {
+                int nightCap = Math.Max(1, ar.nights);
+                if (realWater != null && realWater.v > 0)
+                    zero = AutoSolve.SolveWater(realWater, perf, (double)q, targetBp, nightCap,
+                                                allowFilter, allowUv, false, allowHydra,
+                                                tabletStock, filterDurMax, hydraDuraMax);
+                else
+                    zero = AutoSolve.Solve(ar.feedUl, purityBp, perf, (double)q, targetBp, nightCap,
+                                           allowFilter, allowUv, false, allowHydra,
+                                           tabletStock, filterDurMax, hydraDuraMax);
+            }
+            catch (Exception) { zero = null; }
+            finally
+            {
+                AutoSolve.TabletTarget = oldTarget;
+                AutoSolve.TabletShadow = oldShadow;
+            }
+            if (zero == null || !zero.ok || zero.feedUl < ar.feedUl) return ar;
+            if (forceHydra && !HasAutoTool(zero, "portable")) return ar;
+
+            double netAr = ar.revenue - ar.cost - AutoSolve.ElectricityPerNight * ar.nights;
+            double netZero = zero.revenue - zero.cost - AutoSolve.ElectricityPerNight * zero.nights;
+            // 跨售价档且原方案现金更高：优先保留，不拿影子价压掉跨档收益。
+            if (ar.grade != zero.grade && netAr > netZero) return ar;
+            double scoreAr = netAr - lambda * ar.tablets;
+            double scoreZero = netZero;
+            if (scoreZero > scoreAr + 1e-9) return zero;
+            return ar;
+        }
+
         private static WaterPlan.Report AutoReport(long capUl, int purityBp, int perf, int q, int targetBp,
                                                    int mode, bool searchFeed, long feedUl,
                                                    WaterMath.Water realWater,
                                                    bool allowFilter, bool allowUv, bool allowTablet,
                                                    bool allowHydra, bool forceHydra,
                                                    int tabletStock, int filterDurMax, int hydraDuraMax,
-                                                   string srcName, string bottleName, string bottleSig)
+                                                   string srcName, string bottleName, string bottleSig,
+                                                   int nightLimit = 0)
         {
             mode = (mode == 1 ? 1 : 2);
             if (capUl <= 0) return null;
@@ -1867,7 +2142,8 @@ namespace WaterCalcMod
                 return null;
             }
 
-            int nightCap = Math.Max(1, WaterPlan.NightCap);
+            int nightSetting = Math.Max(1, WaterPlan.NightCap);
+            int nightCap = nightLimit > 0 ? Math.Min(nightLimit, nightSetting) : RecommendNightCap();
             string key = capUl + "|" + purityBp + "|" + perf + "|" + q + "|" + targetBp + "|" +
                          nightCap + "|" + mode + "|pre" + PreMode + "|po" + PostMode + "|" +
                          (allowFilter ? 1 : 0) + (allowUv ? 1 : 0) + (allowTablet ? 1 : 0) +
@@ -1888,9 +2164,14 @@ namespace WaterCalcMod
             }
 
             AutoSolve.UseUiCost();
+            // 性价比自动档才吃影子价；效率档按出水量，固定片数档不替玩家改药量。
+            AutoSolve.TabletShadow = (mode == 2 && PostMode == 0)
+                ? TabletShadowForStock(tabletStock) : 0.0;
             AutoSolve.Result ar;
             if (realWater != null && realWater.v > 0)
             {
+                // 效率档也先压到最少可行晚数：玩家明确要求「像无限效率 2 晚那样」，
+                // 不能因为还能多装 1% 就一路堆到 8 晚；无限道具和背包走同一套晚数优先。
                 if (nightCap > 1 && mode == 1)
                     ar = AutoSolve.SolveMaxOutput(realWater, perf, (double)q, targetBp, nightCap, mode,
                                                   allowFilter, allowUv, allowTablet, allowHydra, forceHydra,
@@ -1968,6 +2249,12 @@ namespace WaterCalcMod
                                          allowTablet, allowHydra, tabletStock, filterDurMax, hydraDuraMax);
             }
 
+            AutoSolve.TabletShadow = 0.0;
+            if (ar != null && mode == 2 && PostMode == 0 && ar.tablets > 0)
+                ar = ApplyTabletShadow(ar, mode, tabletStock, purityBp, perf, q, targetBp,
+                                       realWater, allowFilter, allowUv, allowHydra, forceHydra,
+                                       InfiniteTools ? int.MaxValue : FilterDurNow(),
+                                       HydraDuraMaxForSolve(InfiniteTools));
             if (ar != null && forceHydra && !HasAutoTool(ar, "portable")) ar = null;
             bool hydraHintNow = ar == null && mode == 2 && !forceHydra
                                 && WaterPlan.HydraMode == 0;
@@ -2118,8 +2405,9 @@ namespace WaterCalcMod
                     bool sameAsTap = (pur > 0) && (Math.Abs(realW.Purity - pur) <= 10);
                     if (!sameAsTap || !WaterPlan.AllowMachine || WaterPlan.NoMachine)
                     {
-                        var repW = WaterPlan.BuildFromWater(realW, perf, q, targetBp, Mode, PreMode, PostMode,
-                                                            GameBridge.NameOfItem(b), ownTabs);
+                        var repW = BuildMixReportLimited(realW, perf, q, targetBp, Mode,
+                                                         GameBridge.NameOfItem(b), ownTabs,
+                                                         RecommendNightCap());
                         if (repW != null)
                         {
                             srcName = GameBridge.NameOfItem(b);
@@ -2160,9 +2448,19 @@ namespace WaterCalcMod
             // 玩家 2026-11-10 定案：**三个档都按身上的真实道具建候选** ——
             // 默认也是「用我当前的道具一晚赚更多」，不能假设药片/滤棉无限。
             int ot = ownTabs; bool of = owF.filter, ou = owF.uv; int oh = owF.hydraDur;
-            return WaterPlan.Build(capForPlan, pur, perf, q, targetBp,
-                                   srcName, GameBridge.NameOfItem(b), full, Mode, PreMode, PostMode,
-                                   ot, of, ou, oh);
+            int savePlanNight = WaterPlan.NightCap;
+            try
+            {
+                int planNight = RecommendNightCap();
+                if (savePlanNight > planNight) WaterPlan.NightCap = planNight;
+                return WaterPlan.Build(capForPlan, pur, perf, q, targetBp,
+                                       srcName, GameBridge.NameOfItem(b), full, Mode, PreMode, PostMode,
+                                       ot, of, ou, oh);
+            }
+            finally
+            {
+                WaterPlan.NightCap = savePlanNight;
+            }
         }
 
         /// <summary>批次 20：先试一晚可达量；一晚到不了目标才放开 NightCap 并按满容量重算。</summary>
@@ -2191,9 +2489,21 @@ namespace WaterCalcMod
             if (r1 != null && r1.pick != null && r1.pick.ok) return r1;
             if (saveNight > 1)
             {
-                var rN = WaterPlan.Build(cap0, pur0, perf, q, targetBp,
+                // 默认只显示 2 晚；8 晚留给主页的“升晚多出多少水”旁路，不能从这个回退路径漏出去。
+                int capN = RecommendNightCap();
+                int saveNight2 = WaterPlan.NightCap;
+                WaterPlan.Report rN = null;
+                try
+                {
+                    WaterPlan.NightCap = capN;
+                    rN = WaterPlan.Build(cap0, pur0, perf, q, targetBp,
                                          srcName, bottleName, true, mode, pre, post,
                                          ownTab, ownFilter, ownUv, ownHydraDur);
+                }
+                finally
+                {
+                    WaterPlan.NightCap = saveNight2;
+                }
                 if (rN != null && rN.pick != null) return rN;
             }
             return r1;
@@ -3850,6 +4160,9 @@ namespace WaterCalcMod
             FillSteps(pgSteps);
             FillCalc(pgCalc);
             FillMix(pgMix);
+            // 玩家 2026-11-15：在混水页点标题栏模式小图标会 Rebuild，但 FillMix 只建空文本；
+            // 这里补一次刷新，否则页面停在旧模式/空白，看起来像“切档没反应”。
+            if (UiPage == 5) RefreshMixPage();
             panelMain = MakePage("watercalc", pgMain);
             panelSet = MakePage("watercalc_set", pgSet);
             panelPool = MakePage("watercalc_pool", pgPool);
@@ -4309,6 +4622,33 @@ namespace WaterCalcMod
             page.Add(pMixBody);
         }
 
+        /// <summary>机器选中/取消、机器里的水量或六项变化时，混水页立即换方案，不等玩家重进页面。</summary>
+        private static void MixMachineWatch()
+        {
+            if (UiPage != 5 || pMixBody == null) { lastMixMachineKey = ""; return; }
+            string key = "none";
+            try
+            {
+                GameItem b = null;
+                if (!uiDeselected)
+                {
+                    b = GameBottle();
+                    if (b == null) b = CtxBottle();
+                }
+                if (b != null)
+                {
+                    long v = WaterHelper.GetTotalVolume(b);
+                    long cap = WaterHelper.GetTotalCapacity(b);
+                    int pur = WaterHelper.GetWaterPurity(b);
+                    key = "b|" + v + "|" + cap + "|" + pur + "|" + MachinePartsSig(b);
+                }
+            }
+            catch (Exception e) { Log("[mix] 机器指纹失败 " + e.GetType().Name + " " + e.Message); key = "none"; }
+            if (key == lastMixMachineKey) return;
+            lastMixMachineKey = key;
+            RefreshMixPage();
+        }
+
         /// <summary>点进混水页才扫描：枚举水质组两两组合 + 水龙头，算出净赚 Top5。</summary>
         private static void RefreshMixPage()
         {
@@ -4316,16 +4656,38 @@ namespace WaterCalcMod
             try
             {
                 int tapBp = 0; string note = "";
-                var groups = ScanMixGroups(out tapBp, out note);
+                // 当前机器里那瓶水单独放顶部：它已经被混过，不能当成背包里一瓶干净的“基础水”再列一次。
+                GameItem machineB = null;
+                try
+                {
+                    // 玩家主动取消选择时，即使机器窗口还开着，混水页也回到背包 1+1，不能继续按那台机器算。
+                    if (!uiDeselected)
+                    {
+                        machineB = GameBottle();
+                        if (machineB == null) machineB = CtxBottle();
+                    }
+                }
+                catch (Exception e) { Log("[mix] 取机器瓶失败 " + e.GetType().Name + " " + e.Message); }
+                var groups = ScanMixGroups(out tapBp, out note, machineB);
                 long capUl = calcCapUl;
                 for (int i = 0; i < groups.Count; i++) capUl = Math.Max(capUl, groups[i].capUl);
                 var rows = BuildMixRows(groups, tapBp, capUl);
                 var b = new RichTextBuilder(500);   // 玩家 2026-11-13（第六轮）：行尾要带纯度，行宽放宽避免「已有 基础水 5932.5mL / 98.86%」折成两行
-                int lines = BuildMixText(b, groups, rows, tapBp, capUl, note);
+                int lines = 0;
+                if (machineB != null)
+                {
+                    int tapGrade = 0, tapPurTmp = 0;
+                    try { TapSource(out tapGrade, out tapPurTmp); } catch (Exception) { }
+                    bool machinePlan = false;
+                    lines += BuildMachineMixLines(b, machineB, tapBp, tapGrade, capUl, out machinePlan);
+                    lines += BuildMixText(b, groups, rows, tapBp, capUl, note, machinePlan);
+                }
+                else
+                    lines += BuildMixText(b, groups, rows, tapBp, capUl, note, false);
                 var rich = b.Build();
                 SetT(pMixBody, rich.richTextForeground);
                 // 只显示最高收益的一条方案，高度随实际行数收紧；已有水数量保持全列。
-                mixPageH = Math.Max(150, Math.Min(230, 72 + lines * 14));
+                mixPageH = Math.Max(150, Math.Min(300, 72 + lines * 14));
                 if (panelWin != null && UiPage == 5) { try { panelWin.ResizePixels(PanelW, mixPageH); } catch (Exception) { } }
                 Log("[mix] 页面刷新 " + note + " 组合=" + rows.Count + " cap=" + capUl + " h=" + mixPageH + " lines=" + lines);
             }
@@ -4405,7 +4767,12 @@ namespace WaterCalcMod
             var b3 = Small("步骤", new Action(delegate { SetPage(3); }), 72);
             var b4 = Small("计算", new Action(delegate { SetPage(4); }), 72);
             // 玩家 2026-11-13：混水从计算页里的按钮改成左栏第五个页签（放在「计算」下面）。
-            var b5 = Small("混水", new Action(delegate { SetPage(5); }), 72);
+            // 2026-11-15：已经在混水页时再点一次＝按当前机器水刷新，不再直接跳回主页。
+            var b5 = Small("混水", new Action(delegate
+            {
+                if (UiPage == 5) RefreshMixPage();
+                else SetPage(5);
+            }), 72);
             navSetBtns.Add(b1); navStepsBtns.Add(b3); navCalcBtns.Add(b4); navMixBtns.Add(b5);
             // 玩家 2026-11-11：不改文字色，保留原生深色，只用 ▶ 前缀表示当前页。
             nav.Add(b1); nav.Add(b3); nav.Add(b4); nav.Add(b5);
@@ -4865,6 +5232,13 @@ namespace WaterCalcMod
         private static string calcScopeStr = "";        // 由 RecalcCalc 写，供 RefreshCalcLabels 回填
         private static bool calcManual;       // 玩家点了「清空」：机器开着也不自动读
         private static bool calcManualSource;   // 设置页「手填」：按计算页的六项杂质算，不再用单值滑条
+        // 右键「读取」的样瓶来源。它和设置页手填不同：机器容器一旦实际变了，
+        // 必须交回实时容器，不能继续拿读取时缓存的六项算主页。
+        private static bool calcReadSource;
+        private static GameItem readMachineItem;
+        private static long readMachineVol, readMachineCap;
+        private static int readMachinePur;
+        private static string readMachineParts = "";
         // 清空那一刻右键着的瓶子：只有换成另一瓶才允许再自动读，否则「清空」会被下一次刷新塞回来。
         private static GameItem calcClearPick;
         private static bool calcFromMachine;   // 当前数值是从机器读来的（机器一关就清空）
@@ -4927,6 +5301,12 @@ namespace WaterCalcMod
             if (k == 3)
             {
                 calcManualSource = true;
+                calcReadSource = false;
+                // 「手填」只认计算页这组六项，不再沿用上一次右击/读取的外部瓶：
+                // 否则主页会拿那只已经倒空/容量不同的瓶当源，计算页却拿计算页字段，两个页面必然分叉。
+                lastPickedBottle = null;
+                RightClickTarget = null;
+                calcClearPick = null;
                 CustomPur = -1;
                 SrcIdx = 0;
                 LastMsg = "手填：请到计算页填六项杂质，返回主页按这六项算";
@@ -4937,6 +5317,7 @@ namespace WaterCalcMod
                 return;
             }
             calcManualSource = false;
+            calcReadSource = false;
             bool rustOpen, gutterOpen;
             TapLocks(out rustOpen, out gutterOpen);
             // 玩家 2026-11-14：最高级铁锈水管会同时留下两个解锁位，但真实只能接铁锈。
@@ -5289,8 +5670,8 @@ namespace WaterCalcMod
             // 否则点完默认还是按 50 L 在算，看起来跟效率一模一样。
             // 玩家 2026-11-11 m00327：档位键三态循环 —— 第一次按＝按真实背包道具算，
             // 再按同一个键＝按无限道具算，再按＝回真实。开关是全局的（Q2）。
-            // 玩家 2026-11-13：标题栏小图标不要这个隐藏三态 —— 点「性价比/自定义/效率」就是切档，
-            // 否则同档再点会偷偷切无限道具，看起来像「没切过去、要再点一次」。
+            // 玩家 2026-11-15：标题栏同档再点仍保留「切无限道具」；但切到另一个档会回真实道具，
+            // 避免从效率无限切到性价比时继续按 50 L 满容量算，看不到真正要倒出多少。
             bool sameMode = allowInfiniteToggle && (Mode == i) && !UncapEff;
             UncapEff = false;
             Mode = i; ManualPickLabel = null; Log("[ui] mode=" + i + (sameMode ? " (same -> toggle道具口径)" : ""));
@@ -5303,6 +5684,13 @@ namespace WaterCalcMod
             if (sameMode) ToggleInfinite("再点了一次档位键");
             else
             {
+                // 保留切无限，但切到另一个档时回真实道具：
+                // 玩家从「效率无限」切到「性价比」时要看到真正要倒出多少，而不是继续按 50 L 满容量算。
+                if (InfiniteTools)
+                {
+                    InfiniteTools = false;
+                    Log("[ui] infinite=0 (切档复位真实道具)");
+                }
                 // 底行黄字必须跟着当前档走，不能留着上一次「效率：…」的残留（玩家 2026-11-10 报）。
                 LastMsg = i == 2 ? "性价比：0 过滤棉 + 一晚直出（紫外免费可带）"
                        : "自定义：一晚净赚最多（按容器里的水与目标质量）";
@@ -5319,6 +5707,9 @@ namespace WaterCalcMod
             RefreshModeDesc();
             InvalidateCalc();
             RequestRebuild();
+            // BuildMain 只在首次建树时跑；已经建好树后切档不会重跑 FillMix。
+            // 所以混水页开着时，这里直接按新档刷新一次，不能等下一帧的空 Rebuild。
+            if (UiPage == 5 && pMixBody != null) RefreshMixPage();
         }
 
         /// <summary>「效率」档：一晚装满当前容器、净出水最多（不管性价比）。
@@ -5345,6 +5736,7 @@ namespace WaterCalcMod
             RefreshModeDesc();
             InvalidateCalc();
             RequestRebuild();
+            RefreshMixIfOpen();
         }
 
         /// <summary>当前净水器里装了几个 node 类耗材（过滤棉/紫外灯都是 node_medium）。</summary>
@@ -5385,12 +5777,18 @@ namespace WaterCalcMod
             catch (Exception) { }
             return false;
         }
-        private static void SetTarget(int i) { TargetIdx = i; ManualPickLabel = null; Log("[ui] target=" + i); if (cTarget != null) try { SetB(cTarget, PlanText.TargetNames[Math.Max(0, Math.Min(i, PlanText.TargetNames.Length - 1))]); } catch (Exception) { } RememberSettings(); UnlockPlan("换目标"); DropPlanCache(); RequestRebuild(); }
-        private static void SetPre(int i) { PreMode = i; ManualPickLabel = null; Log("[ui] pre=" + i); ClosePreDrop(true); if (cPre != null) try { SetB(cPre, UiName(PreUi, PreVal, i)); } catch (Exception) { } RememberSettings(); UnlockPlan("换前置"); DropPlanCache(); RequestRebuild(); }
-        private static void SetPost(int i) { PostMode = i; ManualPickLabel = null; Log("[ui] post=" + i); RefreshPostRow(); RememberSettings(); UnlockPlan("换后置"); DropPlanCache(); RequestRebuild(); }
-        private static void SetSrc(int i) { SrcIdx = i; ManualPickLabel = null; Log("[ui] src=" + i); if (cSrc != null) try { SetB(cSrc, SrcUiName(i)); } catch (Exception) { } RememberSettings(); RequestRebuild(); }
+        private static void SetTarget(int i) { TargetIdx = i; ManualPickLabel = null; Log("[ui] target=" + i); if (cTarget != null) try { SetB(cTarget, PlanText.TargetNames[Math.Max(0, Math.Min(i, PlanText.TargetNames.Length - 1))]); } catch (Exception) { } RememberSettings(); UnlockPlan("换目标"); DropPlanCache(); RequestRebuild(); RefreshMixIfOpen(); }
+        private static void SetPre(int i) { PreMode = i; ManualPickLabel = null; Log("[ui] pre=" + i); ClosePreDrop(true); if (cPre != null) try { SetB(cPre, UiName(PreUi, PreVal, i)); } catch (Exception) { } RememberSettings(); UnlockPlan("换前置"); DropPlanCache(); RequestRebuild(); RefreshMixIfOpen(); }
+        private static void SetPost(int i) { PostMode = i; ManualPickLabel = null; Log("[ui] post=" + i); RefreshPostRow(); RememberSettings(); UnlockPlan("换后置"); DropPlanCache(); RequestRebuild(); RefreshMixIfOpen(); }
+        private static void SetSrc(int i) { SrcIdx = i; ManualPickLabel = null; Log("[ui] src=" + i); if (cSrc != null) try { SetB(cSrc, SrcUiName(i)); } catch (Exception) { } RememberSettings(); RequestRebuild(); RefreshMixIfOpen(); }
         /// <summary>海德拉开关：0 自动 / 1 强制 / 2 不用。改完只打脏标记，重建交给下一帧。</summary>
-        private static void SetHydra(int i) { WaterPlan.HydraMode = i; hydraOnce = false; ManualPickLabel = null; Log("[ui] hydra=" + i); RememberSettings(); UnlockPlan("换海德拉"); DropPlanCache(); RequestRebuild(); }
+        private static void SetHydra(int i) { WaterPlan.HydraMode = i; hydraOnce = false; ManualPickLabel = null; Log("[ui] hydra=" + i); RememberSettings(); UnlockPlan("换海德拉"); DropPlanCache(); RequestRebuild(); RefreshMixIfOpen(); }
+
+        /// <summary>设置在混水页里改完立即刷新混水，不能等下一次重建。</summary>
+        private static void RefreshMixIfOpen()
+        {
+            if (UiPage == 5 && pMixBody != null) RefreshMixPage();
+        }
 
         private static void SetNightCap(int i)
         {
@@ -5408,6 +5806,7 @@ namespace WaterCalcMod
             DropPlanCache();
             InvalidateCalc();
             RequestRebuild();
+            RefreshMixIfOpen();
         }
         /// <summary>海德拉耐久上限：300 一只 / 600 两只 / 900 三只 / 0 不限。</summary>
         /// <summary>滑条拖动中：只存值 + 改旁边那行字，绝不整窗重建（重建会卡，玩家报过多次）。</summary>
@@ -5867,6 +6266,7 @@ namespace WaterCalcMod
                 WaterPlan.NightCap = Math.Max(1, Math.Min(WaterPlan.MaxNights,
                     PlayerPrefs.GetInt(NightCapPref, 1)));
                 calcOwner = null; calcLoadedItem = null; calcLoadedVol = 0; calcLoadedCap = 0; calcLoadedPur = 0;
+                calcReadSource = false; readMachineItem = null; readMachineVol = 0; readMachineCap = 0; readMachinePur = 0; readMachineParts = "";
                 panelWin = null; panelPageFor = -1; mainTreeDone = false; panelHeaderDone = false;
                 panelMain = null; panelSet = null; panelPool = null; panelSteps = null; panelCalc = null; panelMix = null;
                 lastLiveSig = null; lastRichSig = null; lastFillKey = null; LastMsg = "";
@@ -5896,6 +6296,7 @@ namespace WaterCalcMod
             }
 #endif
             try { CalcMachineWatch(); } catch (Exception) { }
+            try { MixMachineWatch(); } catch (Exception e) { Log("[mix] 机器监听失败 " + e.GetType().Name + " " + e.Message); }
             try { WaterBook.Tick(); } catch (Exception) { }
             RememberAllWindows();
             if (forcePos.Count > 0)
@@ -6474,7 +6875,11 @@ namespace WaterCalcMod
                     string stepTxt = "";
                     if (noMachUi) stepTxt = "";
                     else if (!noBox && !doneOk && !capDead && r != null && r.pick != null)
+                    {
                         stepTxt = "步骤 " + RawStepsChain(r);
+                        string nightTip = NightUpHintFor(r);
+                        if (nightTip.Length > 0) stepTxt += "\n" + nightTip;
+                    }
                     SetT(pMsg, noMachUi ? "" : live);
                     SetVisible(pMsg, !noMachUi && live.Length > 0);
                     // 玩家 2026-11-10：步骤放到「出来 X mL」的下一行（pStep），底行只留容器状态。
@@ -6563,7 +6968,7 @@ namespace WaterCalcMod
                     SetB(pJoin, "接水");
                     long joinMl = srcOk && needFillMl > 0 ? needFillMl
                                 : (planPourMl > 0 ? planPourMl : (r != null ? BottlePourUl(r.ChosenFeedUl()) / 1000L : 0L));
-                    SetDesc(pJoin, "按当前水源接水：本次 " + joinMl + " mL（容器已有水只补空余，满了先倒出来）");
+                    SetDesc(pJoin, "按当前水源接水：本次 " + WaterPlan.Ml(joinMl * 1000L) + " mL（容器已有水只补空余，满了先倒出来）");
                 }
 
                 // 方案池（表头 + 列表 + 行号键）只在「更多方案」展开时显示：
@@ -6915,6 +7320,7 @@ namespace WaterCalcMod
                        "|h" + WaterPlan.HydraMode + "|hd" + WaterPlan.HydraDuraCap +
                        "|fd" + FilterDurNow() + "|inf" + (InfiniteTools ? "1" : "0") +
                        "|nc" + WaterPlan.NightCap +
+                       "|cm" + (calcManualSource ? 1 : 0) + "|ci" + CalcManualSig() +
                        "|dv" + (devFilter ? 1 : 0) + (devUv ? 1 : 0) + (devTablets ? 1 : 0)
                        + (devMachine ? 1 : 0) + (devHydra ? 1 : 0) +
                        "|ctx" + ctxIndex;
@@ -7820,9 +8226,15 @@ namespace WaterCalcMod
                 // 先提示混合，下面的步骤再按混合水跑，不要把这句写成「倒出 0」。
                 long mixedAdd = r.water0 != null ? r.water0.v - m.VolumeMl * 1000L : 0L;
                 if (mixedAdd >= 1000L)
-                    return PlanText.Lbl("先补 ") + PlanText.Num(WaterPlan.Ml0(mixedAdd) + " mL")
-                         + PlanText.Lbl(" 水管水，混合后 ")
+                {
+                    long roomLeft = Max0(m.CapacityMl * 1000L - m.VolumeMl * 1000L);
+                    long addPour = ReachablePour(mixedAdd, roomLeft);
+                    long planTotal = m.VolumeMl * 1000L + addPour;
+                    return PlanText.Lbl("先补 ") + PlanText.Num(WaterPlan.Ml(addPour))
+                         + PlanText.Lbl("（本方案 ") + PlanText.Num(WaterPlan.Ml(planTotal)) + PlanText.Lbl("）水管水，") + "\n"
+                         + PlanText.Lbl("混合后 ")
                          + PlanText.Pct(r.srcBp) + PlanText.Lbl("，再按步骤");
+                }
                 // 按瓶里这瓶水算（一律用 Report 自己记录的体积，别用面板里可能串台的数字）。
                 if (r.fitUl <= 0)
                 {
@@ -8243,8 +8655,9 @@ namespace WaterCalcMod
             try { PurifierHook.PickedIndex = -1; } catch (Exception) { }
             lastVisible = null;
             calcManual = true;
+            calcReadSource = false;
             try { ClearCalcFields(); } catch (Exception) { }
-            DropPlanCache(); RefreshPickTints(); RequestRebuild();
+            DropPlanCache(); RefreshPickTints(); RequestRebuild(); RefreshMixIfOpen();
             Log("[ui] deselect pair（灰）");
         }
 
@@ -8265,6 +8678,7 @@ namespace WaterCalcMod
                 calcClearPick = null;
                 RightClickTarget = null;
                 calcManualSource = false;
+                calcReadSource = false;
             }
             // 让 PurifierHook 那边也认这个点选，否则它每帧按「第一台可见窗口」把上下文改回去，
             // 表现成：选了 20 L 那台，接水量还是 750 那台锁着，只有关掉 750 窗口才正常。
@@ -8275,6 +8689,7 @@ namespace WaterCalcMod
             RefreshPickTints();
             try { if (UiPage == 4) LoadCalcFromContext(true); } catch (Exception) { }
             RequestRebuild();
+            RefreshMixIfOpen();
             Log("[ui] select pair=" + idx + " winIdx=" + (pw == null ? -1 : PairIndexOf(pw)) +
                 " pairWinVisible=" + (pw == null ? false : PurifierHook.WindowVisible(pw)) + " pairs=" + PurifierHook.Pairs.Count + " mode=" + Mode);
         }
@@ -9362,7 +9777,7 @@ namespace WaterCalcMod
         }
 
         /// <summary>扫描并合并：同 purityBp + 同六项杂质比例（按 10000 基准整数）才合并成一组。</summary>
-        private static List<MixGroup> ScanMixGroups(out int tapBp, out string note)
+        private static List<MixGroup> ScanMixGroups(out int tapBp, out string note, GameItem skipItem = null)
         {
             tapBp = 9800; note = "";
             var list = new List<MixGroup>();
@@ -9381,6 +9796,8 @@ namespace WaterCalcMod
                 {
                     var w = ws[i];
                     if (w == null || w.volUl <= 0) continue;
+                    // 当前机器里那瓶水在混水页顶部单独显示，下面背包组合不再重复列一遍。
+                    if (skipItem != null && ReferenceEquals(w.item, skipItem)) continue;
                     scanned++;
                     WaterMath.Water real = null;
                     try { BuildRealWater(w.item, out real); } catch (Exception) { real = null; }
@@ -9596,7 +10013,456 @@ namespace WaterCalcMod
             return top;
         }
 
-        private static int BuildMixText(RichTextBuilder b, List<MixGroup> groups, List<MixRow> rows, int tapBp, long capUl, string scanNote)
+        /// <summary>
+        /// 混水页/主页共用：按当前页同口径临时设置 WaterPlan 的耗材开关，再算已有水。
+        /// 这里不改 WaterPlan 的实现，只把全局开关恢复到调用前，避免混水页把海德拉/滤棉
+        /// 算进和主页不同的方案里。
+        /// </summary>
+        private static WaterPlan.Report BuildMixReport(WaterMath.Water w, int perf, int q, int targetBp,
+                                                        int mode, string bottleName, int ownTab)
+        {
+            bool saveFilter = WaterPlan.AllowFilter;
+            bool saveUv = WaterPlan.AllowUv;
+            bool saveTablets = WaterPlan.AllowTablets;
+            bool saveHydra = WaterPlan.AllowHydra;
+            double saveShadow = WaterPlan.TabletShadow;
+            int saveFilterDur = WaterPlan.FilterDur;
+            int mixFilterDur = FilterDurNow();
+            WaterPlan.FilterDur = mixFilterDur;
+            WaterPlan.TabletShadow = (mode == 2 && PostMode == 0)
+                ? TabletShadowForStock(ownTab) : 0.0;
+            try
+            {
+                var tools = OwnedTools();
+                WaterPlan.AllowFilter = tools != null && tools.filter && PreFilterOn(PreMode);
+                WaterPlan.AllowUv = tools != null && tools.uv && PreUvOn(PreMode);
+                WaterPlan.AllowTablets = PostMode != 1 && (InfiniteTools || ownTab > 0);
+                // 性价比默认不上海德拉；只有设置页强制海德拉，或效率档/手动启用一次才带。
+                WaterPlan.AllowHydra = WaterPlan.HydraMode == 1
+                                    || (WaterPlan.HydraMode == 0 && (mode == 1 || hydraOnce));
+                return WaterPlan.BuildFromWater(w, perf, q, targetBp, mode, PreMode, PostMode,
+                                                bottleName, ownTab);
+            }
+            finally
+            {
+                WaterPlan.AllowFilter = saveFilter;
+                WaterPlan.AllowUv = saveUv;
+                WaterPlan.AllowTablets = saveTablets;
+                WaterPlan.AllowHydra = saveHydra;
+                WaterPlan.TabletShadow = saveShadow;
+                if (saveFilterDur != mixFilterDur)
+                    Log("[mix] FilterDur " + saveFilterDur + " -> " + mixFilterDur + " -> " + saveFilterDur);
+                WaterPlan.FilterDur = saveFilterDur;
+            }
+        }
+
+        /// <summary>按显示口径限制晚数再跑真实六项：BuildFromWater 吃全局 NightCap，
+        /// 不能让计算页/混水页在“多晚开”时绕过 2 晚显示口径直接给 8 晚方案。</summary>
+        private static WaterPlan.Report BuildMixReportLimited(WaterMath.Water w, int perf, int q, int targetBp,
+                                                              int mode, string bottleName, int ownTab,
+                                                              int nightLimit)
+        {
+            int saveNight = WaterPlan.NightCap;
+            try
+            {
+                if (nightLimit > 0 && saveNight > nightLimit) WaterPlan.NightCap = nightLimit;
+                return BuildMixReport(w, perf, q, targetBp, mode, bottleName, ownTab);
+            }
+            finally
+            {
+                WaterPlan.NightCap = saveNight;
+            }
+        }
+
+        /// <summary>
+        /// 效率档：往当前水逐步兑水源，找“整瓶仍能达标”的最大总量。
+        /// 用 BuildFromWater 而不是 AutoSolve 快速判定，避免 1650 + 2.1 mL 这种只差一点的
+        /// 边界被 AutoSolve 的整升取整判成“跑不完”，导致主界面/混水页只剩当前液体。
+        /// </summary>
+        private static WaterPlan.Report BuildEfficiencyTopUp(WaterMath.Water w0, long capUl, int srcBp,
+                                                             int perf, int q, int targetBp,
+                                                             string bottleName, int ownTab)
+        {
+            if (w0 == null || w0.v <= 0L || capUl <= w0.v || srcBp <= 0) return null;
+            // 先试满容量：多晚开启时，低纯度混合水也可能靠海德拉/净化器跑到目标。
+            WaterMath.Water fullW = MixWithTap(w0, capUl, srcBp);
+            var fullRep = BuildMixReportLimited(fullW, perf, q, targetBp, 1, bottleName, ownTab,
+                                               RecommendNightCap());
+            if (fullRep != null && fullRep.ok && fullRep.pick != null && fullRep.dumpUl <= 0L)
+            {
+                fullRep.capUl = capUl;
+                fullRep.fitUl = capUl;
+                fullRep.dumpUl = 0L;
+                return fullRep;
+            }
+            // 满容量不行才二分“最多还能兑多少”。用 BuildFromWater 直接判定，
+            // 不再拿“混合后立刻 ≥ 目标”的解析上限卡死低纯度水——多晚/海德拉/药片
+            // 是允许先掉纯度、再在净化器里跑回来的。
+            long lo = w0.v, hi = capUl;
+            WaterPlan.Report best = null;
+            for (int it = 0; it < 16 && hi - lo > 1000L; it++)
+            {
+                long mid = lo + (hi - lo) / 2;
+                WaterMath.Water wm = MixWithTap(w0, mid, srcBp);
+                var rm = BuildMixReportLimited(wm, perf, q, targetBp, 1, bottleName, ownTab,
+                                               RecommendNightCap());
+                if (rm != null && rm.ok && rm.pick != null && rm.dumpUl <= 0L)
+                {
+                    lo = mid;
+                    best = rm;
+                }
+                else
+                    hi = mid;
+            }
+            if (lo <= w0.v) return null;
+            WaterMath.Water finalW = MixWithTap(w0, lo, srcBp);
+            var rep = BuildMixReportLimited(finalW, perf, q, targetBp, 1, bottleName, ownTab,
+                                            RecommendNightCap());
+            if (rep != null && rep.ok && rep.pick != null && rep.dumpUl <= 0L)
+                best = rep;
+            if (best == null) return null;
+            best.capUl = capUl;
+            best.fitUl = lo;
+            best.dumpUl = 0L;
+            return best;
+        }
+
+        /// <summary>快速可行性：AutoSolve 能把这份混合水整瓶跑到目标（不要求先倒出）。</summary>
+        private static bool MixCanProcessAll(WaterMath.Water wm, int perf, int q, int targetBp, int ownTab)
+        {
+            if (wm == null || wm.v <= 0) return false;
+            int nightCap = Math.Max(1, WaterPlan.NightCap);
+            bool allowTablet = PostMode != 1 && (InfiniteTools || ownTab > 0);
+            // 与 AutoReport 同一套后置片数口径。
+            AutoSolve.TabletTarget = PostMode >= 2 ? PostMode - 1
+                                                   : (PostMode == 1 ? 0 : -1);
+            bool allowHydra = WaterPlan.HydraMode == 1
+                           || (WaterPlan.HydraMode == 0 && (Mode == 1 || hydraOnce));
+            try
+            {
+                var ar = AutoSolve.SolveWater(wm, perf, (double)q, targetBp, nightCap,
+                                              PreFilterOn(PreMode), PreUvOn(PreMode), allowTablet, allowHydra,
+                                              InfiniteTools ? -1 : ownTab,
+                                              InfiniteTools ? int.MaxValue : FilterDurNow(),
+                                              HydraDuraMaxForSolve(InfiniteTools));
+                return ar != null && ar.ok && ar.feedUl >= wm.v - 1000L;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>性价比档：在容量内找一个「一晚净赚最多」的兑入总量。</summary>
+        private static WaterPlan.Report BestCostTopUp(WaterMath.Water w0, long capUl, int srcBp,
+                                                      int perf, int q, int targetBp,
+                                                      string bottleName, int ownTab,
+                                                      WaterPlan.Report rep0, out long bestUl)
+        {
+            bestUl = w0 != null ? w0.v : 0L;
+            WaterPlan.Report best = rep0 != null && rep0.ok && rep0.pick != null
+                && rep0.pick.nights <= MaxRecommendNights ? rep0 : null;
+            double bestProfit = best != null ? best.ChosenProfit() : double.MinValue;
+            if (w0 == null || capUl <= w0.v) return best;
+
+            long step = Math.Max(1000000L, (capUl - w0.v) / 8);
+            // 先补 1 L 的小步也看一眼：如果 1 晚就能达标，别被 5 L 的粗格漏掉。
+            long first = Math.Min(capUl, w0.v + 1000000L);
+            if (first > w0.v)
+                CostTopUpEval(w0, first, srcBp, perf, q, targetBp, bottleName, ownTab,
+                              ref best, ref bestProfit, ref bestUl);
+            for (long total = w0.v + step; total < capUl; total += step)
+                CostTopUpEval(w0, total, srcBp, perf, q, targetBp, bottleName, ownTab,
+                              ref best, ref bestProfit, ref bestUl);
+            CostTopUpEval(w0, capUl, srcBp, perf, q, targetBp, bottleName, ownTab,
+                          ref best, ref bestProfit, ref bestUl);
+
+            // 粗扫命中后再收 3 刀，避免把「最佳量」落在 5 L 的大格子里。
+            long span = step;
+            for (int it = 0; it < 3; it++)
+            {
+                long lo = Math.Max(w0.v, bestUl - span);
+                long hi = Math.Min(capUl, bestUl + span);
+                if (hi - lo < 500000L) break;
+                CostTopUpEval(w0, lo + (hi - lo) / 2, srcBp, perf, q, targetBp, bottleName, ownTab,
+                              ref best, ref bestProfit, ref bestUl);
+                span /= 2;
+            }
+            return best;
+        }
+
+        private static void CostTopUpEval(WaterMath.Water w0, long total, int srcBp,
+                                          int perf, int q, int targetBp, string bottleName, int ownTab,
+                                          ref WaterPlan.Report best, ref double bestProfit, ref long bestUl)
+        {
+            if (total <= w0.v || total > w0.v + 200000000L) return;
+            WaterMath.Water wm = MixWithTap(w0, total, srcBp);
+            // 先用 AutoSolve 快速筛掉“整瓶都跑不完”的候选，避免 BuildFromWater 对每个失败量再做一轮二分。
+            // 多晚开启时 AutoSolve 的晚数选量会和 BuildFromWater 的真实组合不一致（曾把能跑的大水量误判掉），
+            // 所以多晚下不再用这个快筛，直接让 BuildFromWater 按真实六项给结果。
+            if (WaterPlan.NightCap <= 1 && !MixCanProcessAll(wm, perf, q, targetBp, ownTab)) return;
+            WaterPlan.Report rm = null;
+            bool saveHydraHint = autoHydraHint;
+            int saveNightsMin = lastNightsMin;
+            bool saveHydraOnce = hydraOnce;
+            string saveMsg = LastMsg;
+            try
+            {
+                var tools = OwnedTools();
+                int ownTabNow = tools == null ? 0 : tools.tablets;
+                if (ownTabNow < 0 && !InfiniteTools) ownTabNow = 0;
+                bool allowHydra = WaterPlan.HydraMode == 1
+                               || (WaterPlan.HydraMode == 0 && (Mode == 1 || hydraOnce));
+                // 这里不能再用 BuildMixReport：它吃全局 NightCap=8，会把“15.2 L 一晚”
+                // 算成“15.2 L 八晚”再被 2 晚过滤器丢掉。改用 AutoReport 的 2 晚口径，
+                // 开/关多晚都能真的找到同一档“最多能接多少”的候选。
+                rm = AutoReport(total, wm.Purity, perf, q, targetBp, 2,
+                                false, total, wm,
+                                tools != null && tools.filter, tools != null && tools.uv,
+                                InfiniteTools || ownTabNow > 0, allowHydra, WaterPlan.HydraMode == 1,
+                                InfiniteTools ? -1 : ownTabNow,
+                                InfiniteTools ? int.MaxValue : FilterDurNow(),
+                                HydraDuraMaxForSolve(InfiniteTools),
+                                bottleName, bottleName,
+                                "cost|" + total + "|" + w0.v + "|" + w0.Purity);
+            }
+            catch (Exception) { rm = null; }
+            finally
+            {
+                autoHydraHint = saveHydraHint;
+                lastNightsMin = saveNightsMin;
+                hydraOnce = saveHydraOnce;
+                LastMsg = saveMsg;
+            }
+            if (rm == null || !rm.ok || rm.pick == null || rm.dumpUl > 0) return;
+            // 多晚默认先展示 2 晚及以下；8 晚只用于主页“升晚多出多少水”的提示，
+            // 不能反过来把 8 晚方案推成性价比主方案。
+            if (rm.pick.nights > MaxRecommendNights) return;
+            double profit = rm.ChosenProfit();
+            int newNights = rm.pick.nights;
+            // 玩家 2026-11-15：开多晚就是为了多接水，不能再用“晚数更少”把总量压小。
+            // 用「接水量 − 每晚 1 L」当排序分：同水量时晚数少优先；水量明显更大时允许加晚；
+            // 只为几毫升多跑一晚的候选会被这 1 L/晚的代价压掉，避免盲目堆晚数。
+            long newScore = rm.pick.feedUl - (long)newNights * 1000000L;
+            long bestScore = (best != null && best.ok && best.pick != null)
+                ? best.pick.feedUl - (long)best.pick.nights * 1000000L
+                : long.MinValue;
+            if (best == null || newScore > bestScore
+                || (newScore == bestScore && profit > bestProfit + 0.05))
+            {
+                best = rm;
+                bestProfit = profit;
+                bestUl = total;
+            }
+        }
+
+        /// <summary>
+        /// 混水页顶部：当前机器里这瓶水的现状与“本模式还能怎么处理”。
+        /// 只做展示，不改主页锁定方案，也不动接水/倒水按钮。
+        /// </summary>
+        private static int BuildMachineMixLines(RichTextBuilder b, GameItem bottle, int tapBp, int tapGrade, long capUl, out bool hasPlan)
+        {
+            hasPlan = false;
+            if (b == null || bottle == null) return 0;
+            WaterMath.Water w0;
+            try
+            {
+                if (!BuildRealWater(bottle, out w0) || w0 == null || w0.v <= 0) return 0;
+            }
+            catch (Exception) { return 0; }
+            long vol = w0.v;
+            try { if (capUl <= 0) capUl = WaterHelper.GetTotalCapacity(bottle); } catch (Exception) { }
+            if (capUl < vol) capUl = vol;
+            int perf = 0, q = 0;
+            try { Bonuses(out perf, out q); } catch (Exception) { }
+            int targetBp = PlanText.TargetBp(TargetIdx, q);
+            string bottleName = null;
+            try { bottleName = GameBridge.NameOfItem(bottle); } catch (Exception) { }
+            if (string.IsNullOrEmpty(bottleName)) bottleName = "容器";
+
+            var tools = OwnedTools();
+            int ownTab = tools == null ? 0 : tools.tablets;
+            if (InfiniteTools) ownTab = -1;
+            else if (ownTab < 0) ownTab = 0;
+            int srcBp = tapBp > 0 ? tapBp : 9100;
+            string srcName = SrcName(tapGrade);
+            bool efficiency = Mode == 1;
+
+            // 切档时立即刷新混水页会早于主页重算；这里必须自己把过滤棉预算拉回真实值，
+            // 否则上一次“无限道具”留下的 1<<20 会让 50 L 也被算成能处理。
+            int fDur = FilterDurNow();
+            if (Mode != 2 && fDur <= 0) fDur = WaterPlan.FilterDurPer;
+            WaterPlan.FilterDur = fDur;
+
+            WaterPlan.Report rep0 = null;
+            try
+            {
+                rep0 = BuildMixReportLimited(w0.Clone(), perf, q, targetBp, Mode, bottleName, ownTab,
+                                             RecommendNightCap());
+            }
+            catch (Exception) { rep0 = null; }
+            bool full0 = rep0 != null && rep0.ok && rep0.pick != null && rep0.dumpUl <= 0
+                         && rep0.pick.nights <= MaxRecommendNights;
+            long maxUl = vol;
+            WaterPlan.Report repMax = full0 ? rep0 : null;
+            if (efficiency && capUl > vol && srcBp > 0)
+            {
+                // 找“往当前水里再兑水源、整瓶仍能达标”的最大总量。
+                // 这里必须用 BuildFromWater 统一判定，不能先用 AutoSolve 把 1652 mL 误判成跑不完。
+                WaterPlan.Report rmTop = null;
+                try
+                {
+                    rmTop = BuildEfficiencyTopUp(w0, capUl, srcBp, perf, q, targetBp, bottleName, ownTab);
+                }
+                catch (Exception) { rmTop = null; }
+                if (rmTop != null && rmTop.ok && rmTop.pick != null && rmTop.dumpUl <= 0
+                    && rmTop.pick.nights <= MaxRecommendNights)
+                {
+                    repMax = rmTop;
+                    maxUl = rmTop.fitUl > 0 ? rmTop.fitUl : vol;
+                }
+            }
+            else if (!efficiency && capUl > vol && srcBp > 0)
+            {
+                // 性价比不按“最大可处理量”拉满，而是在容量内找净赚最多的兑入量。
+                // 即使当前满瓶方案是 8 晚，也要按 2 晚口径重新找一次，不能直接跳过。
+                long bestUl = vol;
+                repMax = BestCostTopUp(w0, capUl, srcBp, perf, q, targetBp, bottleName, ownTab,
+                                       rep0, out bestUl);
+                maxUl = bestUl;
+            }
+            if (repMax == null && rep0 != null && rep0.ok && rep0.pick != null
+                && rep0.pick.nights <= MaxRecommendNights)
+                repMax = rep0;
+
+            // 推荐量必须按玩家实际容器凑得出来：50 mL 瓶只能到 1850，
+            // 有 1 mL 滴灌时才能精确到 1888；不能拿理论值直接报。
+            long roomUl = capUl > vol ? capUl - vol : 0;
+            long reachAdd = maxUl > vol ? ReachablePour(maxUl - vol, roomUl) : 0;
+            long reachMax = vol + reachAdd;
+            if (efficiency && reachMax > vol && reachMax < maxUl)
+            {
+                WaterPlan.Report rmReach = null;
+                try
+                {
+                    rmReach = BuildEfficiencyTopUp(w0, reachMax, srcBp, perf, q, targetBp,
+                                                   bottleName, ownTab);
+                }
+                catch (Exception e) { Log("[mix] 可达量重算失败 " + e.GetType().Name + " " + e.Message); }
+                if (rmReach != null && rmReach.ok && rmReach.pick != null && rmReach.dumpUl <= 0
+                    && rmReach.pick.nights <= MaxRecommendNights)
+                {
+                    repMax = rmReach;
+                    maxUl = rmReach.fitUl > 0 ? rmReach.fitUl : reachMax;
+                }
+                else
+                    maxUl = reachMax;
+            }
+            else if (!efficiency && reachMax > vol)
+                maxUl = reachMax;
+            if (maxUl != reachMax)
+                reachAdd = maxUl > vol ? ReachablePour(maxUl - vol, roomUl) : 0;
+            hasPlan = repMax != null && repMax.ok && repMax.pick != null;
+            Log("[mix] machine mode=" + Mode + " v=" + vol + " p=" + w0.Purity
+                + " full=" + (full0 ? 1 : 0) + " max=" + maxUl
+                + " dump=" + (rep0 == null ? -1 : rep0.dumpUl)
+                + " fit=" + (rep0 == null ? -1 : rep0.fitUl));
+
+            int lines = 0;
+            AddLine(b, PlanText.Lbl("当前机器水 ") + PlanText.Num(PlanText.MlTight(vol))
+                       + PlanText.Lbl(" / ") + PlanText.Num(PlanText.MlTight(capUl)),
+                    ColorPalette.LightGray, true);
+            lines++;
+            AddLine(b, PlanText.PctColored(w0.Purity) + PlanText.Lbl("  目标 ") + PlanText.Pct(targetBp),
+                    ColorPalette.LightGray, false);
+            lines++;
+            if (efficiency)
+                AddLine(b, PlanText.Lbl("本模式上限 ") + PlanText.Num(WaterPlan.Ml(maxUl)),
+                        ColorPalette.LightGray, false);
+            else
+                AddLine(b, PlanText.Lbl("性价比按净赚选量"),
+                        ColorPalette.LightGray, false);
+            lines++;
+            if (efficiency)
+            {
+                long add = reachAdd;
+                if (add > 0)
+                    AddLine(b, PlanText.Lbl("最多再兑 ") + PlanText.Num(WaterPlan.Ml(add))
+                               + PlanText.Lbl(" " + srcName) + PlanText.Lbl(" → ")
+                               + PlanText.Num(WaterPlan.Ml(vol + add)),
+                            ColorPalette.LightGray, true);
+                else if (full0)
+                    AddLine(b, "当前就是本模式上限，再兑会掉纯度", ColorPalette.LightGray, true);
+                else
+                {
+                    long dump = rep0 != null ? rep0.dumpUl : vol;
+                    long keep = rep0 != null && rep0.fitUl > 0 ? rep0.fitUl : (vol > dump ? vol - dump : 0);
+                    if (dump > 0 && keep > 0)
+                        AddLine(b, PlanText.Lbl("先倒出 ") + PlanText.Num(PlanText.MlTight(dump))
+                                   + PlanText.Lbl("，留 ") + PlanText.Num(PlanText.MlTight(keep)),
+                                ColorPalette.LightOrange, true);
+                    else
+                        AddLine(b, "现有道具压不到目标", ColorPalette.LightOrange, true);
+                }
+                lines++;
+            }
+            else if (!full0 && repMax == null)
+            {
+                long dump = rep0 != null ? rep0.dumpUl : vol;
+                long keep = rep0 != null && rep0.fitUl > 0 ? rep0.fitUl : (vol > dump ? vol - dump : 0);
+                if (dump > 0 && keep > 0)
+                    AddLine(b, PlanText.Lbl("先倒出 ") + PlanText.Num(PlanText.MlTight(dump))
+                               + PlanText.Lbl("，留 ") + PlanText.Num(PlanText.MlTight(keep)),
+                            ColorPalette.LightOrange, true);
+                else if (dump > 0)
+                    AddLine(b, PlanText.Lbl("先倒出 ") + PlanText.Num(PlanText.MlTight(dump))
+                               + PlanText.Lbl("，现有道具压不到目标"),
+                            ColorPalette.LightOrange, true);
+                else
+                    AddLine(b, "现有道具压不到目标，先别加铁锈", ColorPalette.LightOrange, true);
+                lines++;
+            }
+            else
+            {
+                long add = reachAdd;
+                if (add > 0)
+                    AddLine(b, PlanText.Lbl("性价比再兑 ") + PlanText.Num(WaterPlan.Ml(add))
+                               + PlanText.Lbl(" → 总 ") + PlanText.Num(WaterPlan.Ml(vol + add)),
+                            ColorPalette.LightGray, true);
+                else
+                    AddLine(b, "性价比不补，当前最赚", ColorPalette.LightGray, true);
+                lines++;
+            }
+
+            // 主界面同一条口径：兑入水源后先把混合水纯度报出来，再看净化后。
+            if (repMax != null && maxUl > vol && repMax.srcBp > 0)
+            {
+                AddLine(b, PlanText.Lbl("混合后 ") + PlanText.PctColored(repMax.srcBp),
+                        ColorPalette.LightGray, false);
+                lines++;
+            }
+
+            if (repMax != null && repMax.pick != null)
+            {
+                int outBp = repMax.pick.purityBp > 0 ? repMax.pick.purityBp : repMax.finalBp;
+                AddLine(b, PlanText.Lbl("净化后 ") + PlanText.Num(PlanText.MlTight(repMax.pick.outUl))
+                           + "  " + PlanText.PctColored(outBp), ColorPalette.LightGray, false);
+                lines++;
+                string step = StepChain(repMax.pick);
+                if (!string.IsNullOrEmpty(step))
+                {
+                    AddLine(b, PlanText.Lbl("步骤 ") + step, ColorPalette.LightGray, false);
+                    lines++;
+                }
+                string own = OwnLineText();
+                if (!string.IsNullOrEmpty(own))
+                {
+                    AddLine(b, own, ColorPalette.LightGray, false);
+                    lines++;
+                }
+            }
+            b.AddEmptyLine(3);
+            return lines + 1;
+        }
+
+        private static int BuildMixText(RichTextBuilder b, List<MixGroup> groups, List<MixRow> rows, int tapBp, long capUl, string scanNote, bool hasMachinePlan = false)
         {
             // 玩家 2026-11-13（p5）：界面里不放「— 说明 —」这类解释段，规则只留代码注释。
             // 玩家 2026-11-13（p6）：排版照「步骤」页 —— 一行一件事、每行都短，绝不折行。
@@ -9630,7 +10496,10 @@ namespace WaterCalcMod
             }
             if (rows == null || rows.Count == 0)
             {
-                AddLine(b, "暂无方案（这些水互相兑不升档）", ColorPalette.LightOrange, true);
+                if (hasMachinePlan)
+                    AddLine(b, "背包水暂无单独组合；按上方当前机器水方案接水", ColorPalette.LightGray, false);
+                else
+                    AddLine(b, "暂无方案（这些水互相兑不升档）", ColorPalette.LightOrange, true);
                 lines++;
                 return lines;
             }
@@ -9679,6 +10548,31 @@ namespace WaterCalcMod
         {
             long cap = calcCapUl > 0 ? calcCapUl : (calcWaterUl > 0 ? calcWaterUl : 2000000L);
             if (cap <= 0) return null;
+            // 玩家 2026-11-15：计算页的“自动口径”不再自己另算一套。
+            // 只要计算页显示的就是当前这只瓶（水量/容量都一致），主页和计算页必须返回同一份 Report：
+            // 接水后 postFillFix、放水后解除、等水源变化，全部由主页这一条链统一决定；
+            // 计算页只在“手填/清空/换了一只瓶”时保留独立计算。
+            if (!calcManual)
+            {
+                GameItem mirrorBottle = null;
+                long mv = 0, mc = 0;
+                try
+                {
+                    mirrorBottle = calcManualSource ? ExplicitPickBottle() : CtxBottle();
+                    if (mirrorBottle == null) mirrorBottle = GameBottle();
+                    if (mirrorBottle != null)
+                    {
+                        mv = WaterHelper.GetTotalVolume(mirrorBottle);
+                        mc = WaterHelper.GetTotalCapacity(mirrorBottle);
+                    }
+                }
+                catch (Exception) { mirrorBottle = null; }
+                if (mirrorBottle != null && mv == calcWaterUl && mc == calcCapUl)
+                {
+                    var mainRep = CurrentPlan(true);
+                    if (mainRep != null) return mainRep;
+                }
+            }
             int pur = CalcPurityBp();
             if (calcWaterUl <= 0 || pur <= 0)
             {
@@ -9687,22 +10581,125 @@ namespace WaterCalcMod
                 if (sp0 > 0) pur = sp0;
             }
             if (pur <= 0) pur = 9100;
+            // 玩家 2026-11-15：接水/放水后主页会按 LockVolSig 自动解除 postFillFix，
+            // 计算页以前完全不看这个状态，仍继续按“补满整瓶”算，于是同一瓶 43550 主页给 43196.9、计算页给 42063。
+            // 计算页必须和主页共用同一个接水后状态：六项变了就只算实际这瓶水；水量再变（放水/加水）就解除。
+            if (postFillFix && postFillSig != LockVolSig())
+            {
+                postFillFix = false;
+                postFillSig = "";
+            }
+            bool calcPostFill = postFillFix;
+            WaterMath.Water calcPostWater = null;
+            if (calcPostFill && calcWaterUl > 0L)
+            {
+                try
+                {
+                    if (calcManualSource)
+                    {
+                        // 读取瓶：六项已经在 calcImpUl 里，按实际水量构造，不再按容量放大。
+                        calcPostWater = BuildCalcManualWater(calcWaterUl);
+                    }
+                    else
+                    {
+                        var cb = CtxBottle(); if (cb == null) cb = GameBottle();
+                        if (cb != null
+                            && WaterHelper.GetTotalVolume(cb) == calcWaterUl
+                            && WaterHelper.GetTotalCapacity(cb) == calcCapUl)
+                        {
+                            BuildRealWater(cb, out calcPostWater);
+                        }
+                    }
+                }
+                catch (Exception) { calcPostWater = null; }
+            }
             if (calcManual && calcWaterUl <= 0) FillCalcImpFromPurity(cap, pur);
             // 玩家 2026-11-14：计算页的「需接水」必须跟主页同一套效率口径。
             // 效率档瓶里有水但未满时，主页会按整瓶容量重搜，计算页不能把当前 29950 当成固定方案，
             // 否则 AutoReport 返回 29950 方案，CalcFeedText 就会算出 need=0、整行空白。
             // 手动源（右键读取/设置页手填）必须保留六项原参数；效率档只把同一配比补满到整瓶容量。
             long manualFeed = calcWaterUl > 0 ? calcWaterUl : cap;
-            if (calcManualSource && Mode == 1 && cap > manualFeed) manualFeed = cap;
-            WaterMath.Water manualWater = calcManualSource ? BuildCalcManualWater(manualFeed) : null;
-            bool calcTopUp = calcManualSource
+            if (!calcPostFill && calcManualSource && Mode == 1 && cap > manualFeed) manualFeed = cap;
+            WaterMath.Water manualWater = calcPostFill
+                ? calcPostWater
+                : (calcManualSource ? BuildCalcManualWater(manualFeed) : null);
+            bool calcTopUp = !calcPostFill && (calcManualSource
                            ? (Mode == 1 && manualFeed > calcWaterUl)
-                           : (Mode == 1 && calcWaterUl > 0 && calcCapUl > 0 && calcWaterUl < calcCapUl);
-            bool calcFullRebuild = calcManualSource ? false
-                                   : (Mode == 1 && calcWaterUl > 0 && calcCapUl > 0 && calcWaterUl >= calcCapUl);
-            bool search = calcManualSource ? false
-                         : (!calcManual && (calcWaterUl <= 0 || calcTopUp || calcFullRebuild));
-            long feed = calcManualSource ? manualFeed : (search ? 0L : (calcWaterUl > 0 ? calcWaterUl : cap));
+                           : (Mode == 1 && calcWaterUl > 0 && calcCapUl > 0 && calcWaterUl < calcCapUl));
+            bool calcFullRebuild = calcPostFill ? false : (calcManualSource ? false
+                                   : (Mode == 1 && calcWaterUl > 0 && calcCapUl > 0 && calcWaterUl >= calcCapUl));
+            // 玩家 2026-11-15：主页空瓶会先试“整瓶满装”，计算页却直接走 SearchFeed，
+            // 于是同一个 0/50000 主页给 50000/2晚，计算页只给 44150/1晚。
+            // 这里补上与主页完全同一条“空瓶先试满瓶”分支；失败再退回接水搜索。
+            bool calcEmptyFull = !calcPostFill && !calcManual && !calcManualSource && Mode == 1
+                               && calcWaterUl <= 0L && calcCapUl > 0L && WaterPlan.NightCap > 1;
+            // 玩家 2026-11-15：接水后 2000/50000 主页按“现有水 + 水管水补满整瓶”出 50 L/2晚，
+            // 计算页却仍按 SearchFeed 只找 44.15 L/1晚。这里把主页的 mixedTopUp 分支同样接到计算页。
+            // 读取瓶（calcManualSource）也必须走同一条：否则计算页会把整瓶都当成 97.63% 原水，
+            // 主页却按“2000 mL 97.63% + 水管水”混合成 91.40%，两边方案必然不同。
+            bool calcPartialFull = !calcPostFill && !calcManual && Mode == 1
+                                && calcWaterUl > 0L && calcCapUl > calcWaterUl;
+            WaterMath.Water calcTopWater = null;
+            if (calcPartialFull)
+            {
+                try
+                {
+                    WaterMath.Water baseW = null;
+                    if (calcManualSource)
+                    {
+                        // 读取瓶的六项已经写进 calcImpUl；按当前瓶水量缩成 base，再补水管水。
+                        baseW = BuildCalcManualWater(calcWaterUl);
+                    }
+                    else
+                    {
+                        var cb = CtxBottle(); if (cb == null) cb = GameBottle();
+                        if (cb != null
+                            && WaterHelper.GetTotalVolume(cb) == calcWaterUl
+                            && WaterHelper.GetTotalCapacity(cb) == calcCapUl)
+                        {
+                            if (!BuildRealWater(cb, out baseW)) baseW = null;
+                        }
+                    }
+                    if (baseW != null && baseW.v > 0L)
+                    {
+                        int sg = 0, sp = 0;
+                        try { TapSource(out sg, out sp); } catch (Exception) { sp = 0; }
+                        if (sp <= 0) sp = pur > 0 ? pur : 9100;
+                        calcTopWater = MixWithTap(baseW, calcCapUl, sp);
+                    }
+                }
+                catch (Exception) { calcTopWater = null; }
+            }
+            // 计算页满瓶也要读当前瓶的真实六项；否则主页已经按真实水样给方案，计算页还按纯度均匀水算，
+            // 两边步骤/倒出量必然对不上。只在“计算页水量 == 当前瓶真实水量”时接管，避免拿错瓶。
+            bool calcFullReal = false;
+            WaterMath.Water calcRealWater = null;
+            if (!calcManual && !calcManualSource && calcCapUl > 0 && calcWaterUl > 0 && calcWaterUl >= calcCapUl)
+            {
+                try
+                {
+                    var cb = CtxBottle(); if (cb == null) cb = GameBottle();
+                    if (cb != null)
+                    {
+                        long bv = WaterHelper.GetTotalVolume(cb);
+                        long bc = WaterHelper.GetTotalCapacity(cb);
+                        if (bv == calcWaterUl && bc == calcCapUl && BuildRealWater(cb, out calcRealWater)
+                            && calcRealWater != null && calcRealWater.v > 0)
+                        {
+                            calcFullReal = true;
+                            manualWater = calcRealWater;
+                        }
+                    }
+                }
+                catch (Exception) { calcFullReal = false; calcRealWater = null; }
+            }
+            bool search = calcPostFill ? false
+                         : (calcManualSource ? false
+                         : (!calcManual && (calcWaterUl <= 0 || calcTopUp || (calcFullRebuild && !calcFullReal))));
+            long feed = calcPostFill
+                       ? (calcWaterUl > 0L ? calcWaterUl : cap)
+                       : (calcManualSource ? manualFeed
+                       : (search ? 0L : (calcFullReal ? calcRealWater.v : (calcWaterUl > 0 ? calcWaterUl : cap))));
             var o = OwnedTools();
             int ownTab = (o == null ? 0 : o.tablets);
             if (ownTab < 0 && !InfiniteTools) ownTab = 0;
@@ -9715,17 +10712,61 @@ namespace WaterCalcMod
             bool allowHydra = WaterPlan.HydraMode == 1
                            || (WaterPlan.HydraMode == 0 && (Mode == 1 || hydraOnce));
             bool forceHydra = WaterPlan.HydraMode == 1;
+            int tapSig = 0;
+            try { int sgT = 0; TapSource(out sgT, out tapSig); } catch (Exception) { tapSig = 0; }
             string bottleSig = "calc|" + cap + "|" + calcWaterUl + "|" + SumCalcImpBp() + "|" + (calcManual ? 1 : 0)
-                             + "|src" + (calcManualSource ? 1 : 0) + "|feed" + feed;
-            var rep = AutoReport(cap, pur, calcPerf, calcQuality, calcTargetBp, Mode, search, feed, manualWater,
+                             + "|src" + (calcManualSource ? 1 : 0) + "|feed" + feed + "|tp" + tapSig;
+            WaterPlan.Report rep = null;
+            if (calcEmptyFull)
+            {
+                try
+                {
+                    rep = AutoReport(calcCapUl, pur, calcPerf, calcQuality, calcTargetBp, Mode,
+                                     false, calcCapUl, null,
+                                     allowFilter, allowUv, calInf || ownTab > 0, allowHydra, forceHydra,
+                                     tabStock, fDur, HydraDuraMaxForSolve(calInf),
+                                     "计算器", "计算器",
+                                     bottleSig + "|emptyfull", RecommendNightCap());
+                }
+                catch (Exception) { rep = null; }
+            }
+            if (rep == null && calcPartialFull && calcTopWater != null)
+            {
+                try
+                {
+                    rep = AutoReport(calcCapUl, calcTopWater.Purity, calcPerf, calcQuality, calcTargetBp, Mode,
+                                     false, calcTopWater.v, calcTopWater,
+                                     allowFilter, allowUv, calInf || ownTab > 0, allowHydra, forceHydra,
+                                     tabStock, fDur, HydraDuraMaxForSolve(calInf),
+                                     "计算器", "计算器",
+                                     bottleSig + "|partialfull", RecommendNightCap());
+                }
+                catch (Exception) { rep = null; }
+            }
+            if (rep == null)
+            {
+                rep = AutoReport(cap, pur, calcPerf, calcQuality, calcTargetBp, Mode, search, feed, manualWater,
                                  allowFilter, allowUv, calInf || ownTab > 0, allowHydra, forceHydra,
                                  tabStock, fDur, HydraDuraMaxForSolve(calInf),
-                                 "计算器", "计算器", bottleSig);
+                                 "计算器", "计算器", bottleSig, RecommendNightCap());
+            }
+            // 满瓶真实水样按整瓶跑不动时，先用 BuildFromWater 的真实六项找“倒出多少后能跑”；
+            // 不能再用纯度均匀水做一次接水搜索，否则计算页会和主页/瓶内实际水样分叉。
+            if ((rep == null || rep.pick == null) && !search && calcFullReal && calcRealWater != null)
+            {
+                try
+                {
+                    var realRep = BuildMixReportLimited(calcRealWater, calcPerf, calcQuality, calcTargetBp,
+                                                        Mode, "计算器", ownTab, RecommendNightCap());
+                    if (realRep != null && realRep.pick != null) rep = realRep;
+                }
+                catch (Exception) { }
+            }
             // 玩家 2026-11-14：旧逻辑一旦固定水量失败就只报“多晚也做不到”，
             // 但它没试过减少水量。这里按当前水量做一次降量搜索：
             // 先二分找「当前水量以内、还能达标的 最大水量」，找到就把方案改成它，
             // 计算页用 dumpUl 提示需要先倒出多少；找不到才继续报无解。
-            if ((rep == null || rep.pick == null) && !search && calcWaterUl > 1L)
+            if ((rep == null || rep.pick == null) && !search && !calcFullReal && calcWaterUl > 1L)
             {
                 // 固定水量失败时只做一次「以当前水量为上限的接水搜索」，
                 // 不再用 8 次 AutoReport 二分：切模式会被这 8 次重算拖成卡顿。
@@ -9734,7 +10775,8 @@ namespace WaterCalcMod
                                          allowFilter, allowUv, calInf || ownTab > 0, allowHydra, forceHydra,
                                          tabStock, fDur, HydraDuraMaxForSolve(calInf),
                                          "计算器", "计算器",
-                                         "calc-reduce|" + calcWaterUl + "|" + SumCalcImpBp());
+                                         "calc-reduce|" + calcWaterUl + "|" + SumCalcImpBp(),
+                                         RecommendNightCap());
                 if (reduced != null && reduced.pick != null && reduced.pick.feedUl > 0L
                     && reduced.pick.feedUl < calcWaterUl)
                 {
@@ -9744,6 +10786,44 @@ namespace WaterCalcMod
                     rep = reduced;
                 }
                 else rep = null;
+            }
+            // 计算页的性价比也要走主页同一套「容量内找净赚最多的兑入量」。
+            // AutoReport 只按当前水量固定算，不会主动试 7 L / 15.2 L；不补这一段，
+            // 设置页开多晚后计算器仍是“当前水量”的旧方案，看起来像多晚没同步。
+            if (Mode == 2 && !calcManualSource && calcWaterUl > 0L && calcCapUl > calcWaterUl)
+            {
+                WaterMath.Water baseW = calcFullReal ? calcRealWater : null;
+                if (baseW == null && !calcManual)
+                {
+                    try
+                    {
+                        var cb = CtxBottle(); if (cb == null) cb = GameBottle();
+                        if (cb != null)
+                        {
+                            long bv = WaterHelper.GetTotalVolume(cb);
+                            long bc = WaterHelper.GetTotalCapacity(cb);
+                            if (bv == calcWaterUl && bc == calcCapUl) BuildRealWater(cb, out baseW);
+                        }
+                    }
+                    catch (Exception) { baseW = null; }
+                }
+                if (baseW == null) baseW = WaterMath.Build(calcWaterUl, pur);
+                if (baseW != null && baseW.v > 0L)
+                {
+                    int sg = 0, sp = 0;
+                    try { TodaySource(out sg, out sp); } catch (Exception) { sp = 0; }
+                    if (sp <= 0) sp = pur;
+                    try
+                    {
+                        long bestTotal = calcWaterUl;
+                        var costRep = BestCostTopUp(baseW, calcCapUl, sp, calcPerf, calcQuality, calcTargetBp,
+                                                    "计算器", ownTab, rep, out bestTotal);
+                        if (costRep != null && costRep.pick != null
+                            && costRep.ChosenFeedUl() > calcWaterUl)
+                            rep = costRep;
+                    }
+                    catch (Exception) { }
+                }
             }
             ApplyManualPick(rep);
             int tabN = calInf ? -1 : (o == null ? 0 : o.tablets);
@@ -9932,6 +11012,9 @@ namespace WaterCalcMod
         private static long calcLoadedVol, calcLoadedCap;
         private static int calcLoadedPur;
         private static float calcSigAt = -99f;
+        // 物理机器瓶监听：玩家在游戏里手动倒水/倒出时，calcManual 可能还停在“0 容量假设”。
+        private static GameItem calcWatchItem;
+        private static long calcWatchVol, calcWatchCap;
 
         private static void LoadCalcFromContext(bool force)
         {
@@ -10006,6 +11089,7 @@ namespace WaterCalcMod
             // 清空是计算页的局部操作：不能继续把上次右键读取的样瓶锁成手动源，
             // 否则主页会一直按那只旧瓶算。主页回到当前机器/每日默认，计算页保持 0。
             calcManualSource = false;
+            calcReadSource = false;
             lastPickedBottle = null;
             RightClickTarget = null;
             ClearCalcFields();
@@ -10051,6 +11135,41 @@ namespace WaterCalcMod
         private static void CalcMachineWatch()
         {
             bool mo = MachineOpen();
+            // 玩家在游戏里手动倒水/倒出，不经过面板的 OnFill；calcManual（0 容量假设）会一直冻住计算页。
+            // 机器瓶的水量/容量一变，就退出假设态，按现实瓶重读；手动填六项但瓶没变时不会被覆盖。
+            try
+            {
+                var watchB = GameBottle();
+                if (watchB != null)
+                {
+                    long wv = WaterHelper.GetTotalVolume(watchB);
+                    long wc = WaterHelper.GetTotalCapacity(watchB);
+                    if (calcWatchItem != null && calcManual
+                        && (!ReferenceEquals(watchB, calcWatchItem)
+                            || wv != calcWatchVol || wc != calcWatchCap))
+                    {
+                        calcManual = false;
+                        calcClearPick = null;
+                        calcManualSource = false;
+                        calcReadSource = false;
+                        RefreshCalcFromBottle(watchB, wv, wc, WaterHelper.GetWaterPurity(watchB));
+                        InvalidateCalc();
+                        UnlockPlan("物理瓶变化退出计算假设");
+                        DropPlanCache();
+                        RequestRebuild();
+                    }
+                    calcWatchItem = watchB;
+                    calcWatchVol = wv;
+                    calcWatchCap = wc;
+                }
+                else
+                {
+                    calcWatchItem = null;
+                    calcWatchVol = 0;
+                    calcWatchCap = 0;
+                }
+            }
+            catch (Exception) { }
             if (mo && !prevMachineOpen)
             {
                 // 新机器的窗口刚打开：右键读取的旧瓶/手动源不能继续绑在这台，
@@ -10059,6 +11178,8 @@ namespace WaterCalcMod
                 calcClearPick = null;
                 RightClickTarget = null;
                 calcManualSource = false;
+                calcReadSource = false;
+                readMachineItem = null; readMachineVol = 0; readMachineCap = 0; readMachinePur = 0; readMachineParts = "";
                 calcManual = false;
                 if (UiPage == 4) LoadCalcFromContext(true);
             }
@@ -10081,6 +11202,7 @@ namespace WaterCalcMod
                     if (pv <= 0 && mv > 0)
                     {
                         calcManualSource = false;
+                        calcReadSource = false;
                         calcManual = false;
                         lastPickedBottle = machine;
                         calcClearPick = null;
@@ -10094,7 +11216,94 @@ namespace WaterCalcMod
                     }
                 }
             }
+            // 读取瓶没被倒空、但机器容器已经混水/变水质时，同样交回实时容器。
+            // 放在分支外：机器窗口刚关掉、玩家在面板上看到变化时也要立即跟上。
+            if (calcManualSource && calcReadSource) SyncReadSourceToMachine();
+            if (mo != prevMachineOpen)
+            {
+                // 选中/取消机器后主页与混水页都要立刻换口径：未选走背包 1+1，选中走当前机器加水量。
+                UnlockPlan("机器选中状态变化");
+                DropPlanCache();
+                RequestRebuild();
+            }
             prevMachineOpen = mo;
+        }
+
+        private static void CaptureReadMachine()
+        {
+            readMachineItem = null; readMachineVol = 0; readMachineCap = 0; readMachinePur = 0; readMachineParts = "";
+            try
+            {
+                var machine = GameBottle();
+                if (machine == null) return;
+                readMachineItem = machine;
+                readMachineVol = WaterHelper.GetTotalVolume(machine);
+                readMachineCap = WaterHelper.GetTotalCapacity(machine);
+                readMachinePur = WaterHelper.GetWaterPurity(machine);
+                readMachineParts = MachinePartsSig(machine);
+            }
+            catch (Exception e)
+            {
+                Log("[calc] 读取样瓶时记机器容器失败 " + e.GetType().Name + " " + e.Message);
+            }
+        }
+
+        private static string MachinePartsSig(GameItem b)
+        {
+            if (b == null) return "";
+            int[] parts = WaterHelper.GetLiquidParts(b);
+            if (parts == null) return "";
+            var sb = new System.Text.StringBuilder(parts.Length * 6);
+            for (int i = 0; i < parts.Length; i++) sb.Append(parts[i]).Append(',');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 右键读取只锁定「当时那瓶样水」；机器容器一旦混水、接水或过夜变了水质，
+        /// 主页/计算页都必须回到机器容器的实时值，不能继续用读取时缓存的六项。
+        /// </summary>
+        private static void SyncReadSourceToMachine()
+        {
+            if (!calcManualSource || !calcReadSource) return;
+            GameItem machine;
+            long mv = 0, mc = 0;
+            int mp = 0;
+            string mparts;
+            try
+            {
+                machine = GameBottle();
+                if (machine == null) return;
+                mv = WaterHelper.GetTotalVolume(machine);
+                mc = WaterHelper.GetTotalCapacity(machine);
+                mp = WaterHelper.GetWaterPurity(machine);
+                mparts = MachinePartsSig(machine);
+            }
+            catch (Exception e)
+            {
+                Log("[calc] 检查读取样瓶的机器容器失败 " + e.GetType().Name + " " + e.Message);
+                return;
+            }
+            bool changed = !ReferenceEquals(machine, readMachineItem)
+                           || mv != readMachineVol || mc != readMachineCap || mp != readMachinePur
+                           || !string.Equals(mparts, readMachineParts);
+            if (!changed) return;
+
+            calcManualSource = false;
+            calcReadSource = false;
+            calcManual = false;
+            lastPickedBottle = machine;
+            calcClearPick = null;
+            RightClickTarget = null;
+            UnlockPlan("读取后机器容器已变");
+            DropPlanCache();
+            InvalidateCalc();
+            RequestRebuild();
+            Log("[calc] 读取后机器容器已变 -> 跟随实时容器 vol=" + mv + " pur=" + mp + " cap=" + mc);
+            if (UiPage == 4)
+            {
+                try { LoadCalcFromContext(true); }
+                catch (Exception e) { Log("[calc] 读取后切回实时容器页失败 " + e.GetType().Name + " " + e.Message); }
+            }
         }
 
         private static long SafeCap(GameItem b)
@@ -10211,6 +11420,8 @@ namespace WaterCalcMod
             // 玩家 2026-11-15：读取后设置页水源要显示「手动」，
             // 主页和计算页都按这只瓶的六项原参数算。
             calcManualSource = true;
+            calcReadSource = true;
+            CaptureReadMachine();
             calcManual = false;
             CustomPur = -1;
             SrcIdx = 0;
@@ -10361,8 +11572,32 @@ namespace WaterCalcMod
                 // 已经有水就只补剩余空间，绝不溢出（AddWater 超量会被丢掉，等于白接）。
                 long haveUl2 = 0, capUl2 = 0;
                 try { haveUl2 = WaterHelper.GetTotalVolume(b); capUl2 = WaterHelper.GetTotalCapacity(b); } catch (Exception) { }
+                // 玩家 2026-11-15：先看这一瓶在接水前是不是空的、或者本来就是今天的水管水。
+                // 这两种情况接进去六项不会变，按原方案锁住就行；只有接水真的改变六项时，
+                // 才改成“接完按实际混合水重算”，避免拿接水前的旧水样继续套。
+                bool preEmpty = haveUl2 <= 0;
+                bool preSameTap = false;
+                if (!preEmpty)
+                {
+                    WaterMath.Water preW = null;
+                    try
+                    {
+                        if (BuildRealWater(b, out preW) && preW != null && preW.v > 0)
+                        {
+                            var tapW = WaterMath.Build(preW.v, Math.Max(1, Math.Min(10000, pur)), 0);
+                            preSameTap = true;
+                            for (int ii = 0; ii < CalcImpKeys.Length; ii++)
+                            {
+                                string kk = CalcImpKeys[ii];
+                                if (Math.Abs(preW.Part(kk) - tapW.Part(kk)) > 5L) { preSameTap = false; break; }
+                            }
+                        }
+                    }
+                    catch (Exception) { preSameTap = false; }
+                }
                 PourDiag("start target=" + GameBridge.NameOfItem(b) + " have=" + haveUl2 + " cap=" + capUl2 +
-                         " inf=" + (InfiniteTools ? 1 : 0));
+                         " inf=" + (InfiniteTools ? 1 : 0) + " preEmpty=" + (preEmpty ? 1 : 0) +
+                         " sameTap=" + (preSameTap ? 1 : 0));
 
                 // 玩家 2026-11-11：这个键就是原来的「接水」——只往瓶里灌水，不重算、不改方案。
                 // 方案什么时候变：按「默认 / 效率 / 性价比」或改设置页；倒水/接水/过夜都不变。
@@ -10388,20 +11623,27 @@ namespace WaterCalcMod
                 // 但还要再按整瓶可达量收一次（选中方案给的是理论上限 1857，整瓶只能凑 1850）。
                 long bottleUl = keepUl;
                 long planFeedUl = 0;
+                long shownTargetUl = 0;   // 面板上「先补 / 需接水」对应的最终总量（µL）
                 try
                 {
-                    var r0 = CurrentPlan(true);
+                    // 以面板当前真正显示的那份方案为准：按接水键必须倒进「先补」这个量，
+                    // 不能按 CurrentPlan 里另一份尚未刷新到界面的方案走。
+                    WaterPlan.Report r0 = planCache;
+                    if (r0 == null || r0.pick == null) r0 = CurrentPlan(true);
                     long r0Feed = (r0 != null && r0.pick != null) ? r0.pick.feedUl : 0L;
                     if (r0Feed > 0) planFeedUl = r0Feed;
-                    // 刚切无限/多晚时，CurrentPlan 可能还差一帧才刷新；用面板上真正显示的那份
-                    // planCache 兜底，避免卡一写着“还要接 20050”，接水键却按旧方案判定“够了”。
-                    long cacheFeed = (planCache != null && planCache.pick != null) ? planCache.pick.feedUl : 0L;
-                    if (cacheFeed > planFeedUl) planFeedUl = cacheFeed;
-                    if (planFeedUl > 0)
-                        bottleUl = BottlePourUl(planFeedUl, capUl2);
+                    if (r0 != null && r0.fromWater && r0.water0 != null)
+                    {
+                        long roomNow = Max0(capUl2 - haveUl2);
+                        long addNow = ReachablePour(r0.water0.v - haveUl2, roomNow);
+                        if (addNow > 0) shownTargetUl = haveUl2 + addNow;
+                    }
+                    else if (planFeedUl > 0)
+                        shownTargetUl = BottlePourUl(planFeedUl, capUl2);
+                    if (shownTargetUl > 0) bottleUl = shownTargetUl;
                     else if (InfiniteTools && capUl2 > haveUl2)
                         bottleUl = capUl2;       // 无方案兜底：无限效率本来就要装满当前瓶
-                    PourDiag("plan r0=" + r0Feed + " cache=" + cacheFeed + " plan=" + planFeedUl +
+                    PourDiag("plan r0=" + r0Feed + " shown=" + shownTargetUl +
                              " bottle=" + bottleUl + " cap=" + capUl2 + " have=" + haveUl2);
                 }
                 catch (Exception) { }
@@ -10422,12 +11664,20 @@ namespace WaterCalcMod
                     try { int gTmp; TapSource(out gTmp, out srcPurNow); } catch (Exception) { }
                     if (havePurNow > 0 && srcPurNow > 0 && havePurNow > srcPurNow)
                     {
-                        PourDiag("keep-better-water have=" + havePurNow + " tap=" + srcPurNow);
-                        LastMsg = "瓶里现成的水 " + PlanText.Pct(havePurNow) + " 比水龙头 " + PlanText.Pct(srcPurNow) +
-                                  " 还好，不自动倒掉；要接水请先手动倒出或换空瓶";
-                        Log("[pour] keep-better-water have=" + havePurNow + " tap=" + srcPurNow);
-                        Rebuild(true);
-                        return "keep-better-water";
+                        // 有明确方案要补到 shownTarget 时，按方案混：这张卡本来就算好了
+                        // 「混合后」纯度，不能因为旧水更好就拒绝接水、让玩家手动倒。
+                        bool plannedTopUp = shownTargetUl > haveUl2;
+                        if (!plannedTopUp)
+                        {
+                            PourDiag("keep-better-water have=" + havePurNow + " tap=" + srcPurNow);
+                            LastMsg = "瓶里现成的水 " + PlanText.Pct(havePurNow) + " 比水龙头 " + PlanText.Pct(srcPurNow) +
+                                      " 还好，不自动倒掉；要接水请先手动倒出或换空瓶";
+                            Log("[pour] keep-better-water have=" + havePurNow + " tap=" + srcPurNow);
+                            Rebuild(true);
+                            return "keep-better-water";
+                        }
+                        Log("[pour] allow-plan-mix have=" + havePurNow + " tap=" + srcPurNow +
+                            " target=" + shownTargetUl);
                     }
                     topUpInPlace = true;
                 }
@@ -10511,17 +11761,18 @@ namespace WaterCalcMod
                 // 整瓶凑量的拆解只用于「背包要带多少水」的提示，不再压低下限（玩家：能 1850 就不该只给 1800）。
                 // 玩家：接水要按「容器 + 选中方案」来，不能一律灌到模型上限。
                 // 有选中方案 → 就灌方案量；没方案 → 才用一晚上限，再用整瓶可达量收口。
-                long keepTapUse = BottlePourUl(keepTap, capUl2);
-                var rPick0 = CurrentPlan(true);
+                long keepTapUse = shownTargetUl > 0 ? shownTargetUl : BottlePourUl(keepTap, capUl2);
+                WaterPlan.Report rPick0 = planCache;
+                if (rPick0 == null || rPick0.pick == null) rPick0 = CurrentPlan(true);
                 WaterPlan.Report rFillPlan = rPick0;   // 锁定用：这是「玩家按下接水时看到的那份方案」
                 long pickFeed = rPick0 == null ? 0L : BottlePourUl(rPick0.ChosenFeedUl(), capUl2);
-                if (pickFeed > 0) keepTapUse = pickFeed;
+                if (shownTargetUl <= 0 && pickFeed > 0) keepTapUse = pickFeed;
                 // keepTapUse 是「目标总量」，不是「本次补接量」。这里不能再按剩余空间夹：
                 // 瓶里已有 18850、方案目标 44150 时，剩余空间是 31150，但本次只该补 25300。
                 // 循环里的 gap = wantTotal - haveNow 会自己按当前水量补足。
                 if (keepTapUse > WaterHelper.GetTotalCapacity(dest))
                     keepTapUse = WaterHelper.GetTotalCapacity(dest);
-                else if (pickFeed <= 0)
+                else if (shownTargetUl <= 0 && pickFeed <= 0)
                 {
                     // 没有选中方案：按整瓶可达量收一次（能凑到 1850 就不该只给 1800）。
                     // 注意这一支只能在没有方案时走：以前它写在 else 里，等于「装得下就一律压回整瓶量」，
@@ -10609,16 +11860,31 @@ namespace WaterCalcMod
                 }
                 LastMsg = "已灌 " + showMl + " mL  " + PlanText.Pct(readPur) + "（" + name + "）";
                 lastKey = "";
-                // 玩家 2026-11-11：接完就锁住这份方案，之后过滤/过夜改了水质也不许自己换方案。
-                LockPlan(rFillPlan, "接水后锁定");
-                // 玩家 2026-11-15：读取的样水已经实际倒进目标容器，
-                // 此时继续锁着读取瓶会让主页仍按读取时的容量；切回目标容器，让容器/方案跟着实际水量。
+                // 玩家 2026-11-15：接水会改变容器里六项配比，旧方案是按接水前的水样出的，
+                // 接完再拿旧方案继续走会和实际混水冲突。只有这次接水真的改变六项时，
+                // 接完改成“只按实际这瓶水算”：不再继续搜还能再接多少，也不会按一次又让接第二段。
+                // 空瓶 / 瓶里本来就是今天水管水（含玩家手动加过但六项仍与今日水源一致）时不改变六项，
+                // 仍按原方案锁住，正常走之前的模式。
+                // 玩家 2026-11-15：先清空成 0 容量做假设计算、随后真的把水倒进机器，
+                // 计算页不能再停在“手填/清空”的旧状态；物理接水以机器瓶为唯一真值。
+                // 只清计算页的假设锁，不动读取样瓶（calcManualSource 下面单独处理）。
+                if (calcManual)
+                {
+                    calcManual = false;
+                    calcClearPick = null;
+                }
+                bool fillChangesParts = !preEmpty && !preSameTap;
+                bool fixActual = fillChangesParts && (!calcManual || calcManualSource);
+                // 读取的样水已经实际倒进目标容器：切回目标容器，让容器/方案跟着实际水量。
                 if (calcManualSource)
                 {
                     calcManualSource = false;
+                    calcReadSource = false;
                     lastPickedBottle = dest;
                     UnlockPlan("读取样水已入容器");
                 }
+                if (fillChangesParts)
+                    UnlockPlan("接水后六项变了，按实际混合水重算");
                 try
                 {
                     if (!calcManual)
@@ -10626,6 +11892,18 @@ namespace WaterCalcMod
                 }
                 catch (Exception) { }
                 InvalidateCalc();
+                if (fixActual)
+                {
+                    postFillFix = true;
+                    postFillSig = LockVolSig();
+                }
+                else if (!calcManualSource)
+                {
+                    // 六项没变，原方案仍然成立；锁在刷新之后落，避免计算页指纹变化把锁判失效。
+                    postFillFix = false;
+                    postFillSig = "";
+                    LockPlan(rFillPlan, "接水后锁定");
+                }
                 Rebuild(true);
                 return "ok container=" + name + " vol=" + showMl + " pur=" + readPur;
             }
