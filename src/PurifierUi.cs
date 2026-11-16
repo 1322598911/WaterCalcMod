@@ -2913,6 +2913,9 @@ namespace WaterCalcMod
             }
             if (zero == null || !zero.ok || zero.feedUl < ar.feedUl) return ar;
             if (forceHydra && !HasAutoTool(zero, "portable")) return ar;
+            // 2026-11-17 方案 1：0 晚硬优先。即使药片影子价算出来 1 晚方案更赚，
+            // 也不允许它顶掉已经达标的 0 晚方案；多晚方案仍由「更多方案」保留。
+            if (zero.nights == 0 && ar.nights > 0) return zero;
 
             double netAr = ar.revenue - ar.cost - (AutoSolve.ElectricityPerNight + AutoSolve.TimeValuePerNight) * ar.nights;
             double netZero = zero.revenue - zero.cost - (AutoSolve.ElectricityPerNight + AutoSolve.TimeValuePerNight) * zero.nights;

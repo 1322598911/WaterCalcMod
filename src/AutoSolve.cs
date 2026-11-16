@@ -566,7 +566,8 @@ namespace WaterCalcMod
                     if (bestT != null) result = bestT;
                 }
             }
-            // 0 晚候选按同一套 Net（含时间效率成本）重新比一次；不能因为净化器路径短就默认选它。
+            // 0 晚候选再比一次：0 晚硬优先；同为 0 晚时再按 Net（含时间效率成本）比较。
+            // 旧注释说的「不能因为净化器路径短就默认选它」已由 2026-11-17 的方案 1 取代。
             for (int i = 0; i < zeroNightCands.Count; i++)
             {
                 var z = BuildResult(zeroNightCands[i], targetBp);
