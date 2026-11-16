@@ -395,6 +395,7 @@ namespace WaterCalcMod
                 if (ReferenceEquals(ctxWins[i], w)) { overrideBottle = ctxBottles[i]; ctxIndex = i + 1; break; }
             // 闭包里拿到的 bottleInv 可能是 null（创建窗口那一刻还没配对）→ 按窗口反查 Pair 补上，
             // 否则所有窗口都会退回到「全局当前机器」，表现成只有一台能灌。
+            int pairIdx = -1;
             try
             {
                 for (int i = 0; i < PurifierHook.Pairs.Count; i++)
@@ -404,10 +405,34 @@ namespace WaterCalcMod
                     if (!ReferenceEquals(p.Window, w)) continue;
                     if (p.BottleInv != null) overrideBottle = p.BottleInv;
                     ctxIndex = i + 1;
-                    return;
+                    pairIdx = i;
+                    break;
                 }
             }
             catch (Exception) { }
+            // 玩家 2026-11-17：点另一台机器的「净水助手/接水」图标后，只切窗口不切 activeIdx，
+            // 顶部读数跟着新机器走，方案却还锁在旧机器上，必须切一次模式才重算。
+            // 当前窗口就是玩家正在操作的那台，计算机器必须一起切过去并解锁旧方案。
+            if (pairIdx >= 0) AdoptPairForWindow(pairIdx);
+        }
+
+        /// <summary>把当前计算机器切到正在操作的这台机器，并让旧方案失效。
+        /// 不能直接调 SelectPair（它会再调 UseWindow，形成递归）。</summary>
+        private static void AdoptPairForWindow(int idx)
+        {
+            if (idx < 0) return;
+            bool changed = activeIdx != idx || MachineOverride != idx || uiDeselected;
+            if (!changed) return;
+            activeIdx = idx;
+            MachineOverride = idx;
+            uiDeselected = false;
+            try { PurifierHook.PickedIndex = idx; } catch (Exception) { }
+            UnlockPlan("换机器");
+            DropPlanCache();
+            RefreshPickTints();
+            RefreshMixIfOpen();
+            RequestRebuild();
+            Log("[ui] adopt pair=" + idx + " (window switch)");
         }
 
         /// <summary>上下文窗口里的瓶；没有就 null。</summary>
