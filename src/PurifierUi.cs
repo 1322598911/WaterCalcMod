@@ -9397,8 +9397,18 @@ namespace WaterCalcMod
         {
             if (uiDeselected) return null;
             var pairs = PurifierHook.Pairs;
-            // 先按当前全局窗口从「最新配对」往前找：窗口关掉再开时 Pairs 会留下旧配对，
-            // 旧配对的 BottleInv 仍挂着旧容器，activeIdx 一旦没刷新就会读回旧瓶（P5）。
+            // 玩家 2026-11-17：绿点选中的机器必须优先于全局 MachineWindow。
+            // 否则另一台机器的悬停/窗口焦点会把 GameBottle 带到别台：主页容器/水源是另一台，
+            // 方案和锁定却还在选中台；绿点按几次把 MachineWindow 撞回来才对齐。
+            int idx = activeIdx >= 0 ? activeIdx : MachineOverride;
+            if (idx >= 0 && idx < pairs.Count)
+            {
+                var selected = pairs[idx];
+                if (selected != null && selected.Window != null && PurifierHook.WindowVisible(selected.Window))
+                    return selected;
+            }
+            // 没选中（或选中的旧窗口已关）时，才按当前全局窗口从「最新配对」往前找：
+            // 窗口关掉再开时 Pairs 会留下旧配对，旧配对的 BottleInv 仍挂着旧容器（P5）。
             PurifierHook.Pair sameWindow = null;
             for (int i = pairs.Count - 1; i >= 0; i--)
             {
@@ -9411,12 +9421,6 @@ namespace WaterCalcMod
                 if (sameWindow == null) sameWindow = p;
             }
             if (sameWindow != null) return sameWindow;
-            int idx = activeIdx >= 0 ? activeIdx : MachineOverride;
-            if (idx >= 0 && idx < pairs.Count)
-            {
-                var p = pairs[idx];
-                if (p != null && PurifierHook.WindowVisible(p.Window) && PurifierHook.PairSelected(p)) return p;
-            }
             return null;
         }
 
