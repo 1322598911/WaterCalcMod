@@ -337,11 +337,16 @@ namespace WaterCalcMod
             return a.tablets < b.tablets;
         }
 
-        /// <summary>最终选择：同样按 Net（含电费+时间效率成本）比较，0 晚候选也参与。</summary>
+        /// <summary>最终选择：0 晚硬优先；0 晚内部再按 Net（含电费+时间效率成本）比较。</summary>
         private static bool BetterFinal(Result a, Result b)
         {
             if (a == null || !a.ok) return false;
             if (b == null || !b.ok) return true;
+            // 玩家 2026-11-17：只要 0 晚方案达标，就不允许被 1 晚以上的方案顶掉。
+            // 旧版先比 Net，净化器多跑一晚带来的水量/毛利会把 0 晚方案压下去，
+            // 导致第二天刷新后同一瓶水从「直接 2 药」变成「净化器 + 过夜」。
+            if (a.nights == 0 && b.nights > 0) return true;
+            if (b.nights == 0 && a.nights > 0) return false;
             double sa = Net(a), sb = Net(b);
             if (sa != sb) return sa > sb;
             if (a.w.v != b.w.v) return a.w.v > b.w.v;
@@ -748,11 +753,28 @@ namespace WaterCalcMod
                 if (a.nights != b.nights) return a.nights < b.nights;
                 return a.cost < b.cost;
             }
+            // 性价比：0 晚硬优先；同为 0 晚或多晚时才比每升成本、净赚。
+            // SearchFeed 会按不同接水量比较候选，这里必须也拦住 1 晚方案，
+            // 否则 AutoSolve 内部选了 0 晚，外层搜索仍可能按每升成本换成过夜方案。
+            if (a.nights == 0 && b.nights > 0) return true;
+            if (b.nights == 0 && a.nights > 0) return false;
+            double la = CostPerLiter(a), lb = CostPerLiter(b);
+            if (la != lb) return la < lb;
             double pa = a.revenue - a.cost - (ElectricityPerNight + TimeValuePerNight) * a.nights;
             double pb = b.revenue - b.cost - (ElectricityPerNight + TimeValuePerNight) * b.nights;
             if (pa != pb) return pa > pb;
             if (a.w.v != b.w.v) return a.w.v > b.w.v;
             return a.nights < b.nights;
+        }
+
+        private static double CostPerLiter(Result r)
+        {
+            if (r == null || r.w == null || r.w.v <= 0) return double.MaxValue;
+            // 玩家要的是「每升成品水的成本」：分母用纯水 WaterPart，不能用进水体积，
+            // 否则挤水/杂质多的方案会显得单位成本更低，反而被选成性价比推荐。
+            long litersUl = r.w.WaterPart > 0 ? r.w.WaterPart : r.w.v;
+            double cost = r.cost + (ElectricityPerNight + TimeValuePerNight) * r.nights;
+            return cost / (litersUl / 1000000.0);
         }
     }
 }

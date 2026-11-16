@@ -50,6 +50,7 @@ namespace WaterCalcMod
         {
             if (modeBtnCheap != null) SetDesc(modeBtnCheap, "性价比");
             if (modeBtnUncap != null) SetDesc(modeBtnUncap, "效率");
+            if (infBtn != null) SetB(infBtn, (InfiniteTools ? "▶" : "") + "无限道具");
         }
 
         /// <summary>模式/道具口径变了，计算页的缓存必须作废——否则 RecalcCalc 会直接返回旧 Rep。</summary>
@@ -123,6 +124,7 @@ namespace WaterCalcMod
         private static readonly Dictionary<PixelWindow, MachineryButton> winCalc
             = new Dictionary<PixelWindow, MachineryButton>();
         private static MachineryButton modeBtnCheap, modeBtnUncap;   // 标题栏：效率 / 性价比
+        private static MachineryButton infBtn;                        // 设置页：无限道具
         private static Sprite iEff;
         private static PixelWindow panelWin;
         private static PixelWindow detailWin;
@@ -1472,10 +1474,16 @@ namespace WaterCalcMod
         private const int MaxRecommendNights = 2;
         private static bool postFillFix;
         private static string postFillSig = "";
+        // 锁定这份方案时是不是处在“接水后只按实际水算”的临时状态。
+        // 瓶子还没满时，这种方案只是当时的临时答案；之后必须重新允许找补水。
+        private static bool lockPostFillFix;
         // 方案执行进度：锁定的方案是一串有序步骤；过滤/药片/紫外等做完后，
         // 当前瓶水对得上 rawSteps 的某一中间态，就只显示剩余步骤，不重新搜补水。
         private static bool progressActive;
         private static int progressDoneSteps;
+        // 药片可以比过滤步骤先用（玩家实际就是这么操作）；只靠 progressDoneSteps
+        // 这个“前缀到第几步”无法表示“后面的药先用了”，所以单独记已用药片数。
+        private static int progressTabletUsed;
         // 上一次已确认的进度水位/纯度：药片是一次一次加的，游戏读数有截断，
         // 不能只靠 rawSteps 精确匹配；用它识别“又加了一片”这种单步变化。
         private static long progressLastVolUl;
@@ -1487,6 +1495,8 @@ namespace WaterCalcMod
         // 换方案对比：旧方案失效时先留一份快照，新方案算出来后只在“新方案更赚”时显示差额。
         private static WaterPlan.Report compareOld;
         private static int compareOldDone;
+        private static string compareOldModeSig = "";
+        private static bool compareExplicit;
         private static bool comparePending;
         private static string compareText = "";
 
@@ -1507,20 +1517,94 @@ namespace WaterCalcMod
             LockPlan(r, why, true);
         }
 
+        private static bool SmallWaterChangeFromLocked()
+        {
+            var old = compareOld;
+            if (old == null || old.pick == null) return false;
+            if (compareOldModeSig != LockModeSig()) return false;
+            var raw = RawResultFor(old);
+            if (raw == null || raw.rawSteps == null || raw.rawSteps.Count == 0) return false;
+            bool hasTablet = false;
+            for (int i = 0; i < raw.rawSteps.Count; i++)
+                if (raw.rawSteps[i] != null && raw.rawSteps[i].tool == "tablet") { hasTablet = true; break; }
+            if (!hasTablet) return false;
+            long vol = 0L; int bp = 0; long cap = 0L;
+            try
+            {
+                var b = PlanBottle();
+                if (b == null) return false;
+                vol = WaterHelper.GetTotalVolume(b);
+                bp = WaterHelper.GetWaterPurity(b);
+                cap = WaterHelper.GetTotalCapacity(b);
+            }
+            catch (Exception) { return false; }
+            if (old.capUl > 0 && cap > 0 && old.capUl != cap) return false;
+            if (lockedVolUl <= 0 || lockedPurityBp <= 0) return false;
+            if (Math.Abs(vol - lockedVolUl) > 400000L) return false;
+            if (Math.Abs(bp - lockedPurityBp) > 350) return false;
+            // 水质变差不是“放药片”，不改回旧方案。
+            if (bp < lockedPurityBp - 5) return false;
+            return true;
+        }
+
         private static void LockPlan(WaterPlan.Report r, string why, bool full)
         {
             if (r == null || r.pick == null) return;
+            // 放药/小幅倒水时，某些监视分支会先把旧方案解掉；这里在真正覆盖前拦一次：
+            // 设置没变、还是同一只瓶、水量只少了一点、纯度没变差，就恢复旧方案。
+            // 否则玩家放下一片药，界面就换成另一套带“补 X”的方案。
+            if (!compareExplicit && comparePending && compareOld != null && SmallWaterChangeFromLocked())
+            {
+                lockedReport = compareOld;
+                lockedFull = true;
+                lockModeSig = LockModeSig();
+                lockBottleSig = LockVolSig();
+                lockPostFillFix = postFillFix;
+                lockedAt = UnityEngine.Time.realtimeSinceStartup;
+                progressActive = compareOldDone > 0;
+                progressDoneSteps = compareOldDone;
+                progressTabletUsed = 0;
+                try
+                {
+                    var b = PlanBottle();
+                    if (b != null)
+                    {
+                        lockedVolUl = WaterHelper.GetTotalVolume(b);
+                        lockedPurityBp = WaterHelper.GetWaterPurity(b);
+                        progressLastVolUl = lockedVolUl;
+                        progressLastPurityBp = lockedPurityBp;
+                    }
+                }
+                catch (Exception) { }
+                progressTabletUsed = TabletUsedSinceLock(true);
+                if (progressTabletUsed > 0) progressActive = true;
+                waterGraceSig = "";
+                waterGraceAt = -999f;
+                comparePending = false;
+                compareExplicit = false;
+                compareText = "";
+                Log("[lock] 水量小变化，恢复旧方案");
+                return;
+            }
             lockedReport = r;
             lockedFull = full;
+            waterGraceSig = "";
+            waterGraceAt = -999f;
             lockModeSig = LockModeSig();
             lockBottleSig = LockVolSig();
+            lockPostFillFix = postFillFix;
             lockedAt = UnityEngine.Time.realtimeSinceStartup;
             // 记录锁定时的瓶内水与库存，用来判断后续变化是不是“方案执行进度”。
             progressActive = false;
             progressDoneSteps = 0;
+            progressTabletUsed = 0;
             try
             {
-                var b = CtxBottle();
+                // 锁方案时记录的必须是这份方案实际对应的瓶，不能先抓鼠标上下文里的瓶。
+                // 接水/倒水时光标可能停在别的水源瓶，旧版先取 CtxBottle 会把 lockedVolUl
+                // 记成另一瓶，放药后 TabletProgressFromStart 看到“水量反而变多”，永远认不出进度。
+                var b = PlanBottle();
+                if (b == null) b = CtxBottle();
                 if (b == null) b = GameBottle();
                 if (b != null)
                 {
@@ -1533,7 +1617,15 @@ namespace WaterCalcMod
             progressLastVolUl = lockedVolUl;
             progressLastPurityBp = lockedPurityBp;
             lockedFilterOwned = FilterDurOwned();
-            try { var o = OwnedTools(); lockedTabletCount = o == null ? 0 : o.tablets; }
+            try
+            {
+                // 锁方案时库存也必须是当前值；OwnedTools 有 6 秒缓存，
+                // 刚用过药片就锁方案会把旧的药片数量记进来，之后每片都被误判成“已用”。
+                ownCache = null;
+                ownTime = -999f;
+                var o = OwnedTools();
+                lockedTabletCount = o == null ? 0 : o.tablets;
+            }
             catch (Exception) { lockedTabletCount = 0; }
             Log("[lock] 锁定方案（" + why + "）feed=" + (r.pick.feedUl / 1000) + "mL out=" + (r.pick.outUl / 1000) + "mL");
             BuildCompareLine(r);
@@ -1552,6 +1644,18 @@ namespace WaterCalcMod
             comparePending = false;
             try
             {
+                // 旧方案也要真的进「更多方案」：只写一句“换方案 +7.1”但列表里看不到，
+                // 玩家会以为换方案是假的（2026-11-16 报）。同一水量档才加，避免把另一套水混进来。
+                if (compareOld != null && compareOld.pick != null && now.pick != null)
+                {
+                    long of = compareOld.ChosenFeedUl(), nf = now.ChosenFeedUl();
+                    if (of <= 0 || nf <= 0 || Math.Abs(of - nf) <= 1500L)
+                        AddComboUnique(now, compareOld.pick);
+                }
+                // 只有一条达标解时没有“换方案”可言；用 AllRows 而不是 TableRows，
+                // 否则新加的档位不会被算进来，切几次效率后换方案提示又消失。
+                var alts = AllRows(now, 40);
+                if (alts == null || alts.Count < 2) { compareText = ""; return; }
                 double oldNet = compareOld.ChosenProfit();
                 double newNet = now.ChosenProfit();
                 double diff = newNet - oldNet;
@@ -1581,10 +1685,16 @@ namespace WaterCalcMod
             // 先把旧方案留到下一次 LockPlan，让 BuildCompareLine 能报“新方案比旧方案多赚什么”。
             var oldForCompare = lockedReport;
             int oldDoneForCompare = progressDoneSteps;
+            compareOldModeSig = lockModeSig;
+            compareExplicit = why != null && why.Contains("手动选择");
             postFillFix = false;
             postFillSig = "";
+            lockPostFillFix = false;
+            waterGraceSig = "";
+            waterGraceAt = -999f;
             progressActive = false;
             progressDoneSteps = 0;
+            progressTabletUsed = 0;
             if (oldForCompare != null && oldForCompare.pick != null)
             {
                 compareOld = oldForCompare;
@@ -1596,9 +1706,16 @@ namespace WaterCalcMod
             {
                 compareOld = null;
                 comparePending = false;
+                compareExplicit = false;
                 compareText = "";
             }
-            if (lockedReport == null) return;
+            if (lockedReport == null)
+            {
+                // 即使没有锁定方案，也要丢掉上一次的求解缓存：
+                // 自动档曾经缓存过 null，手动选水源后清了缓存才出方案（玩家 2026-11-16 报）。
+                DropPlanCache();
+                return;
+            }
             lockedReport = null;
             lockModeSig = "";
             lockBottleSig = "";
@@ -1620,14 +1737,71 @@ namespace WaterCalcMod
             long vol = 0L; int bp = 0;
             try
             {
-                var b = CtxBottle();
-                if (b == null) b = GameBottle();
-                if (b == null) b = lastMachineBottle;
+                // 玩家 2026-11-16：先倒到别的容器时 CtxBottle 会切到别的瓶，
+                // 按它判起手量会把方案解成另一套（P3）。锁方案只认当前机器瓶。
+                var b = PlanBottle();
                 if (b == null) return false;
                 vol = WaterHelper.GetTotalVolume(b);
                 bp = WaterHelper.GetWaterPurity(b);
             }
             catch (Exception) { return false; }
+
+            // 玩家 2026-11-16：用药一次就让我补一次水。
+            // 药片可以比过滤步骤先用；旧逻辑发现“过滤还没做、药却少了”直接 return false，
+            // LockValid 就把方案解掉重算，重算后的当前水量自然带出“补 X”。
+            // 这里先认背包药片减少，保留原方案，只把剩余药片数往下扣。
+            int tabUsedNow = TabletUsedSinceLock(true);
+            if (tabUsedNow > progressTabletUsed) progressTabletUsed = tabUsedNow;
+
+            // 放药后水会变少、纯度会升高。旧版先落到下面的“补水未到起手量”分支，
+            // 导致第一次放药就重锁成“先补 X + 药N”；这里先把药片/前置进度认出来。
+            int earlyDone = CompletedLockedSteps();
+            if (earlyDone <= 0) earlyDone = TabletProgressFromStart(vol, bp);
+            if (earlyDone <= 0) earlyDone = NearLastPrePurifierStep(vol, bp);
+            if (earlyDone > 0 && !ProgressHasPurifier(earlyDone))
+            {
+                progressActive = true;
+                progressDoneSteps = earlyDone;
+                lockBottleSig = LockVolSig();
+                progressLastVolUl = vol;
+                progressLastPurityBp = bp;
+                Log("[lock] 前置进度=" + earlyDone + "，保留原方案");
+                return true;
+            }
+
+            // 药片已经用了，但方案前面还有过滤没做：不能因此把整份方案解掉。
+            // 保留原方案，步骤行只扣掉已用的药片；过滤/净化器仍按原顺序显示。
+            if (tabUsedNow > 0 && !ProgressHasPurifier(progressDoneSteps))
+            {
+                progressActive = true;
+                progressDoneSteps = Math.Max(progressDoneSteps, 0);
+                lockBottleSig = LockVolSig();
+                progressLastVolUl = vol;
+                progressLastPurityBp = bp;
+                Log("[lock] 药片已用 " + tabUsedNow + " 片，保留原方案");
+                return true;
+            }
+
+            // 倒出去再倒回原瓶：水回到锁定值，说明只是转了一圈，
+            // 不能按中间水量重锁成无补水的另一种方案（P3）。
+            if (lockedVolUl > 0 && Math.Abs(vol - lockedVolUl) <= 1500L
+                && (lockedPurityBp <= 0 || Math.Abs(bp - lockedPurityBp) <= 5))
+            {
+                // 已经执行过药片/过滤步骤时，水回到原值不能把进度清零；只把签名重新对上。
+                if (progressDoneSteps > 0)
+                {
+                    lockBottleSig = LockVolSig();
+                    Log("[lock] 水量回到锁定值，已有步骤进度，保留进度");
+                    return true;
+                }
+                progressActive = false;
+                progressDoneSteps = 0;
+                lockBottleSig = LockVolSig();
+                postFillFix = false;
+                postFillSig = "";
+                Log("[lock] 水量回到锁定值，保留原方案");
+                return true;
+            }
 
             long expect = -1L;
             // 先倒出：锁定时的水 - 面板报的 dumpUl（report.fitUl 是倒完应留下的量）。
@@ -1654,7 +1828,6 @@ namespace WaterCalcMod
                     && vol > expect + 1500L && vol <= lockedVolUl + 1500L)
                 {
                     progressDoneSteps = 0;
-                    lockBottleSig = LockVolSig();
                     Log("[lock] 倒水未到起手量 vol=" + vol + " 目标=" + expect + "，保留原方案");
                     return true;
                 }
@@ -1664,7 +1837,6 @@ namespace WaterCalcMod
                     && vol > lockedVolUl - 1500L && vol < lockedReport.pick.feedUl - 1500L)
                 {
                     progressDoneSteps = 0;
-                    lockBottleSig = LockVolSig();
                     Log("[lock] 补水未到起手量 vol=" + vol + " 目标=" + lockedReport.pick.feedUl + "，保留原方案");
                     return true;
                 }
@@ -1692,23 +1864,60 @@ namespace WaterCalcMod
                 UnlockPlan("取消选择机器");
                 return false;
             }
-            if (MachineOpen() && ActiveMachineBottle() == null)
+            if (lockedReport != null && MachineOpen() && ActiveMachineBottle() == null)
             {
+                // 放药片/拖动库存的同一帧，当前配对可能短暂读不到容器；不能一帧就解锁，
+                // 否则方案会在放药瞬间被重算成带补水的新方案。真拿走容器时 0.8 秒后仍会解锁。
+                float noBottleNow = UnityEngine.Time.realtimeSinceStartup;
+                if (noBottleSince < 0f) noBottleSince = noBottleNow;
+                if (noBottleNow - noBottleSince < 0.8f) return true;
+                noBottleSince = -1f;
                 UnlockPlan("机器里没有容器");
+                // P5：解锁后还要把已经画在面板上的旧方案请求重绘一次；否则同一帧里
+                // 文本仍是旧模型，玩家看起来像“容器拿走了但状态没刷新”。
+                RequestRebuild();
+                RefreshMixIfOpen();
                 return false;
             }
+            noBottleSince = -1f;
             // 玩家 2026-11-16：3000 mL 方案完成后换 6 L 容器，旧方案还锁着不刷新（切模式才变）。
             // 容器容量不同就是另一瓶，立即解锁定，不能靠水量/水质差去猜。
-            long capNow = 0L;
+            long capNow = 0L, volNow = 0L;
             try
             {
                 var b = PlanBottle();
-                if (b != null) capNow = WaterHelper.GetTotalCapacity(b);
+                if (b != null)
+                {
+                    capNow = WaterHelper.GetTotalCapacity(b);
+                    volNow = WaterHelper.GetTotalVolume(b);
+                }
             }
-            catch (Exception) { capNow = 0L; }
+            catch (Exception) { capNow = 0L; volNow = 0L; }
+            // 玩家 2026-11-16：把液体倒进容器再倒出来（瓶已空）后，旧方案还锁着，
+            // 主页仍显示「出来 6000 / 这瓶水直接跑」。空瓶没有任何现有水可跑，
+            // 必须丢掉旧方案，按空瓶重新找接水量，不能拿 lastMachineBottle 的旧水量兜底。
+            if (volNow <= 0L)
+            {
+                UnlockPlan("容器已倒空");
+                return false;
+            }
             if (lockedReport.capUl > 0 && capNow > 0 && lockedReport.capUl != capNow)
             {
                 UnlockPlan("容器容量变了 " + lockedReport.capUl + "->" + capNow);
+                return false;
+            }
+            // 玩家 2026-11-16：空容器接外面的水放回去后，第一次锁成 8.95 的不补水方案，
+            // 按两次“性价比”才变成补 91.5。postFillFix 是“接水后只按实际水算”的临时锁，
+            // 瓶子还没到容量时不能继续压着不找补水；直接解锁，让下一次按当前水重算。
+            // lockPostFillFix 记录这份方案锁定当时是不是这种临时状态：即使临时标记后来被清掉，
+            // 只要瓶还没满，也不能让那份“不补水”结果一直锁着。
+            if ((postFillFix || lockPostFillFix) && !progressActive && lockedReport.dumpUl <= 0
+                && capNow > 0L && volNow > 0L && capNow - volNow > 1500L)
+            {
+                postFillFix = false;
+                postFillSig = "";
+                lockPostFillFix = false;
+                UnlockPlan("接水后未满，按当前水重找补水");
                 return false;
             }
             if (LockModeSig() != lockModeSig) { UnlockPlan("设置变了"); return false; }
@@ -1718,16 +1927,30 @@ namespace WaterCalcMod
                 try
                 {
                     var cb = PlanBottle();
+                    if (cb == null) cb = lastMachineBottle;
                     if (cb != null) { curVol = WaterHelper.GetTotalVolume(cb); curBp = WaterHelper.GetWaterPurity(cb); }
                 }
                 catch (Exception) { }
                 // 玩家 2026-11-16：面板让「先倒出 X mL」后玩家照做了，体积当然会变；
                 // 这不是方案失效，而是执行了方案的起手步骤。倒到 fitUl / dumpUl 后保留原方案，
                 // 否则一倒完就重锁新方案，玩家接不上上一次的步骤。
-                if (LockedFeedOrDumpDone()) return true;
+                // 放药片时游戏的背包数量/瓶内读数会晚一两帧更新；先给 1.2 秒稳定期，
+                // 期间保留原方案并反复检查进度，不能第一帧就把方案解掉重算成“补 X”。
+                string curSig = LockVolSig();
+                if (waterGraceSig != curSig)
+                {
+                    waterGraceSig = curSig;
+                    waterGraceAt = UnityEngine.Time.realtimeSinceStartup;
+                }
+                if (LockedFeedOrDumpDone())
+                {
+                    waterGraceSig = "";
+                    return true;
+                }
                 int done = CompletedLockedSteps();
                 int advanced = AdvanceTabletProgress(curVol, curBp);
                 if (advanced > done) done = advanced;
+                if (done <= 0) done = NearLastPrePurifierStep(curVol, curBp);
                 if (done > 0 && !ProgressHasPurifier(done))
                 {
                     // 过滤/药片/紫外/混水等前置或中间步骤已经做完：
@@ -1737,9 +1960,27 @@ namespace WaterCalcMod
                     lockBottleSig = LockVolSig();
                     progressLastVolUl = curVol;
                     progressLastPurityBp = curBp;
+                    waterGraceSig = "";
                     Log("[lock] 进度=" + done + "，只显示剩余步骤");
                     return true;
                 }
+                // 0 晚方案不需要再补一滴水：只要已经开始执行（已放药/过滤等），
+                // 水量小变化不再解锁，避免最后一片药后差十几 mL 又搜出「补 X」。
+                if (progressActive && lockedReport.pick != null && lockedReport.pick.nights <= 0
+                    && !ProgressHasPurifier(progressDoneSteps))
+                {
+                    lockBottleSig = LockVolSig();
+                    progressLastVolUl = curVol;
+                    progressLastPurityBp = curBp;
+                    waterGraceSig = "";
+                    Log("[lock] 0 晚方案执行中，保留原方案");
+                    return true;
+                }
+                // 读数还没稳定：保留旧方案，下几帧再判；超过 1.2 秒仍对不上才按原逻辑重算。
+                if (waterGraceAt >= 0f
+                    && UnityEngine.Time.realtimeSinceStartup - waterGraceAt < 1.2f)
+                    return true;
+                waterGraceSig = "";
                 // 过夜/净化器后必须按当前瓶水重算药片与剩余晚数；
                 // 同时压掉“先补多少”的自动接水搜索。
                 var oldRep = lockedReport;
@@ -1777,6 +2018,17 @@ namespace WaterCalcMod
                     Log("[lock] 瓶签名未变，但水对应方案中间态，进度=" + done);
                 }
             }
+            // 有些药片步骤的水量/纯度变化极小，锁签名可能没变；这里仍按背包药片减少量
+            // 把“已用药片”补上，避免一次用药后仍显示完整药数或重新算成补水方案。
+            // 这里不强制刷新库存：每帧扫背包会卡；真正变化时上面的 LockedFeedOrDumpDone
+            // 会用 TabletUsedSinceLock(true) 刷新。
+            int tabUsedNow = TabletUsedSinceLock(false);
+            if (tabUsedNow > progressTabletUsed)
+            {
+                progressTabletUsed = tabUsedNow;
+                progressActive = true;
+                lockBottleSig = LockVolSig();
+            }
             return true;
         }
 
@@ -1812,8 +2064,53 @@ namespace WaterCalcMod
             return progressDoneSteps;
         }
 
-        /// <summary>当前瓶水是否对得上锁定方案 rawSteps 的某个中间态。
-        /// 匹配上就认为玩家已经做到那一步；返回已完成步骤数（0 = 没匹配上）。</summary>
+        /// <summary>锁定方案的第一步是药片时，用量降/纯升识别玩家已经放了几片。
+        /// 旧版只在 progressActive 且已有进度后才认；第一次放药会落到
+        /// LockedFeedOrDumpDone 的“补水未到起手量”分支，于是方案被重锁成先补方案。</summary>
+        private static int TabletProgressFromStart(long vol, int bp)
+        {
+            if (lockedReport == null || lockedReport.pick == null || lockedVolUl <= 0 || lockedPurityBp <= 0) return 0;
+            var raw = RawResultFor(lockedReport);
+            if (raw == null || raw.rawSteps == null || raw.rawSteps.Count == 0) return 0;
+            var first = raw.rawSteps[0];
+            if (first == null || first.tool != "tablet") return 0;
+            long dVol = lockedVolUl - vol;
+            int dBp = bp - lockedPurityBp;
+            if (dVol <= 0 || dVol > 400000L || dBp <= 0 || dBp > 350) return 0;
+            int count = (int)Math.Round(dVol / 76000.0);
+            if (count < 1) count = 1;
+            int left = 0;
+            for (int i = 0; i < raw.rawSteps.Count; i++)
+            {
+                var st = raw.rawSteps[i];
+                if (st == null || st.tool != "tablet") break;
+                left++;
+            }
+            if (count > left) count = left;
+            return count > 0 ? count : 0;
+        }
+
+        /// <summary>当前水已经到「净化器之前最后一步」：放完最后一片药后，不能因为差十几 mL 又让补 X。</summary>
+        private static int NearLastPrePurifierStep(long vol, int bp)
+        {
+            var raw = RawResultFor(lockedReport);
+            if (raw == null || raw.rawSteps == null || raw.rawSteps.Count == 0) return 0;
+            int lastPre = -1;
+            for (int i = 0; i < raw.rawSteps.Count; i++)
+            {
+                var st = raw.rawSteps[i];
+                if (st == null) continue;
+                if (st.tool != "purifier") lastPre = i;
+            }
+            if (lastPre < 0) return 0;
+            var last = raw.rawSteps[lastPre];
+            if (last == null) return 0;
+            if (Math.Abs(last.volUl - vol) > 50000L) return 0;
+            if (Math.Abs((int)Math.Round(last.purity * 100.0) - bp) > 5) return 0;
+            return lastPre + 1;
+        }
+
+        /// <summary>当前瓶水是否对得上锁定方案 rawSteps 的某个中间态。</summary>
         private static int CompletedLockedSteps()
         {
             var raw = RawResultFor(lockedReport);
@@ -1822,6 +2119,7 @@ namespace WaterCalcMod
             try
             {
                 var b = PlanBottle();
+                if (b == null) b = lastMachineBottle;
                 if (b == null) return 0;
                 vol = WaterHelper.GetTotalVolume(b);
                 bp = WaterHelper.GetWaterPurity(b);
@@ -1940,6 +2238,15 @@ namespace WaterCalcMod
                 if (st == null) continue;
                 if (st.tool == tool) count += Math.Max(1, st.count);
             }
+            // 药片可能是在过滤之前先用的；这时 progressDoneSteps 仍是 0，
+            // 不能只按前缀数，否则主页会一直显示“药共4/剩4”。
+            if (tool == "tablet")
+            {
+                int used = Math.Max(count, progressTabletUsed);
+                int total = PlanTabletTotal();
+                if (total > 0 && used > total) used = total;
+                return used;
+            }
             return count;
         }
 
@@ -2039,7 +2346,7 @@ namespace WaterCalcMod
                 // 重量结果（full）优先：别让轻量结果把带方案表的整份覆盖掉。
                 if (r != null && r.pick != null && (lockedReport == null || full))
                     LockPlan(r, "算完即锁", full);
-                return r;
+                return lockedReport != null ? lockedReport : r;
             }
             finally { GameBridge.EndMemo(); }
         }
@@ -2067,21 +2374,37 @@ namespace WaterCalcMod
             long capUl = WaterHelper.GetTotalCapacity(b);
             long volUl = WaterHelper.GetTotalVolume(b);
             if (capUl <= 0) capUl = volUl;
+            // 空瓶不可能处于“接水后固定按现有水算”的状态：清掉上次残留的临时标记。
+            if (volUl <= 0L && postFillFix) { postFillFix = false; postFillSig = ""; }
             // 接水后如果六项变了，只按实际这瓶水算，不再继续搜下一段接水量。
             // 玩家手动再加/倒水会改水量，签一对不上就自动解除，回到正常推荐。
-            if (postFillFix && postFillSig != LockVolSig())
-            {
-                postFillFix = false;
-                postFillSig = "";
-            }
-            bool topUpAllowed = !postFillFix;
+            // 但如果接完还没到容量，仍要允许性价比档重新找“补到容量”的方案；
+            // 否则第一次接水后会被 postFillFix 压成不补水的方案（玩家 2026-11-16 报）。
+            // 玩家 2026-11-16：postFillFix 只该压“接了一点水但还没满”的瓶；
+            // 空瓶必须重新搜接水量，不能因为上次接水残留的 postFillFix 就退回“按整瓶接满”。
+            bool topUpAllowed = !postFillFix
+                || volUl <= 0L
+                || (volUl > 0L && capUl > 0L && capUl - volUl > 1500L);
             int srcGrade = 0, tapPur = 0;
             try { TodaySource(out srcGrade, out tapPur); } catch (Exception) { tapPur = 0; }
+            // 空瓶时以主页已经显示出来的水源为准：自动档现场读失败/读成另一只时，
+            // 不能让「上面写着沟渠 86.54，方案却空」继续出现。
+            if (volUl <= 0L && Model != null && Model.SourcePurBp > 0)
+            {
+                tapPur = Model.SourcePurBp;
+                srcGrade = Model.Grade;
+                if (srcGrade != 4 && srcGrade != 5)
+                    srcGrade = TapPurLooksValid(5, tapPur) ? 5
+                             : (TapPurLooksValid(4, tapPur) ? 4 : 0);
+            }
             // 补进容器的水来自水龙头，不能拿瓶里现成水的纯度去补。
             // 手动源（右键读取）尤其明显：2 L 幽灵水 + 48 L 铁锈水会混成另一种水。
             int tapFeedGrade = 0, tapFeedPur = 0;
             try { TapSource(out tapFeedGrade, out tapFeedPur); } catch (Exception) { tapFeedPur = 0; }
-            if (tapFeedPur <= 0) tapFeedPur = tapPur > 0 ? tapPur : 9100;
+            // 空瓶没有「瓶里现成水」，补水纯度就必须等于界面显示的水源纯度。
+            if (volUl <= 0L && tapPur > 0) tapFeedPur = tapPur;
+            // 非空瓶绝不拿瓶内水纯度当水龙头补水：否则会出现「98.20% 补 3750 还是 98.20%」。
+            // 水龙头读不到就不补，保留现有水样。
             int purityBp = CustomPur > 0 ? CustomPur : WaterHelper.GetWaterPurity(b);
             if (volUl <= 0 && CustomPur <= 0 && tapPur > 0 && !calcManualSource) purityBp = tapPur;
             string srcName = calcManualSource ? "手填" : (CustomPur > 0 ? "手填" : SrcName(srcGrade));
@@ -2095,7 +2418,7 @@ namespace WaterCalcMod
                 // 效率档按整瓶容量补满；补进去的水来自水龙头，必须按 tapFeedPur 混进去，
                 // 不能把整瓶都当成读取样水的纯度。
                 long calcVol = volUl > 0 ? volUl : capUl;
-                if (topUpAllowed && Mode == 1 && capUl > calcVol && calcVol > 0)
+                if (topUpAllowed && Mode == 1 && capUl > calcVol && calcVol > 0 && tapFeedPur > 0)
                 {
                     mixBaseW = BuildCalcManualWater(calcVol);
                     realW = MixWithTap(mixBaseW, capUl, tapFeedPur);
@@ -2113,7 +2436,7 @@ namespace WaterCalcMod
             {
                 hasReal = volUl > 0 && BuildRealWater(b, out realW) && realW != null && realW.v > 0;
                 // 机器/容器里已有水，效率档补到容量时同样是「现有水 + 水龙头水」的混合物。
-                if (topUpAllowed && hasReal && Mode == 1 && volUl > 0 && capUl > volUl)
+                if (topUpAllowed && hasReal && Mode == 1 && volUl > 0 && capUl > volUl && tapFeedPur > 0)
                 {
                     mixBaseW = realW.Clone();
                     realW = MixWithTap(mixBaseW, capUl, tapFeedPur);
@@ -2127,9 +2450,10 @@ namespace WaterCalcMod
             int fDur = FilterDurNow();
             // 批次 29：性价比自动档默认不用海德拉；效率自动档保留海德拉拉量。
             // 「启用海德拉」只把 hydraOnce 置真一次，不改设置页的 HydraMode。
-            bool allowHydra = WaterPlan.HydraMode == 1
-                           || (WaterPlan.HydraMode == 0 && (Mode == 1 || hydraOnce));
-            bool forceHydra = WaterPlan.HydraMode == 1;
+            bool hasHydra = InfiniteTools || (tools != null && tools.hydraDur > 0);
+            bool allowHydra = hasHydra && (WaterPlan.HydraMode == 1
+                           || (WaterPlan.HydraMode == 0 && (Mode == 1 || hydraOnce)));
+            bool forceHydra = WaterPlan.HydraMode == 1 && hasHydra;
             // 玩家 2026-11-14：性价比接完水后再切效率，效率档不能把「现有瓶水」当成固定上限，
             // 否则只会复用性价比那瓶，永远不会提示还需补多少。效率档只要瓶没满，
             // 就按整瓶容量重新搜接水量，界面再用 feed - 现有水量算出“还差多少”。
@@ -2375,7 +2699,8 @@ namespace WaterCalcMod
         {
             if (existing == null || existing.v <= 0 || totalUl <= existing.v) return existing;
             long addUl = totalUl - existing.v;
-            if (tapPurityBp <= 0) tapPurityBp = 9100;
+            // 读不到水龙头真值就不混：宁可保留现有水样，也不拿 91.00 假值污染结果。
+            if (tapPurityBp <= 0) return existing;
             var tap = WaterMath.Build(addUl, Math.Max(1, Math.Min(10000, tapPurityBp)), 0);
             var w = new WaterMath.Water { v = totalUl, cap = 0 };
             for (int i = 0; i < CalcImpKeys.Length; i++)
@@ -2409,6 +2734,10 @@ namespace WaterCalcMod
         // 步骤页/主页/计算页只读它，避免再各自模拟一遍固定顺序。
         private static readonly Dictionary<WaterPlan.Report, AutoSolve.Result> autoRawResults =
             new Dictionary<WaterPlan.Report, AutoSolve.Result>();
+        // 方案表里点中的 Combo 也要有对应的 AutoSolve 结果；否则点第 2 条后
+        // r.pick 变了，主页步骤还读第 1 条的 rawSteps（玩家 2026-11-16 报）。
+        private static readonly Dictionary<WaterPlan.Combo, AutoSolve.Result> autoComboRaw =
+            new Dictionary<WaterPlan.Combo, AutoSolve.Result>();
 
         // 只做展示提示，不参与推荐：2 晚方案旁边告诉玩家“升到 8 晚最多多出多少水”。
         private static readonly Dictionary<WaterPlan.Report, string> nightUpHints =
@@ -2488,7 +2817,28 @@ namespace WaterCalcMod
         private static AutoSolve.Result RawResultFor(WaterPlan.Report r)
         {
             if (r == null) return null;
+            // 当前选中方案优先：玩家在方案表点了另一条后，主页/步骤必须换成那一条的原始步骤。
+            if (r.pick != null && autoComboRaw.ContainsKey(r.pick)) return autoComboRaw[r.pick];
+            // 切页/刷新会重建 Combo 对象；此时按「同一套方案数值」找原始步骤，
+            // 不能因为对象换了就退回另一条，否则步骤页会显示和主页不同的方案。
+            if (r.pick != null)
+            {
+                foreach (var kv in autoComboRaw)
+                {
+                    var c = kv.Key;
+                    if (c != null && c.ok && SameCombo(c, r.pick)) return kv.Value;
+                }
+            }
             return autoRawResults.ContainsKey(r) ? autoRawResults[r] : null;
+        }
+
+        private static bool SameCombo(WaterPlan.Combo a, WaterPlan.Combo b)
+        {
+            if (a == null || b == null) return false;
+            return a.feedUl == b.feedUl && a.outUl == b.outUl && a.purityBp == b.purityBp
+                && a.tablets == b.tablets && a.filterUsed == b.filterUsed
+                && a.nights == b.nights && a.hydraDur == b.hydraDur && a.hydra == b.hydra
+                && a.filter == b.filter && a.uv == b.uv;
         }
 
         // 批次 35：前置档位真正进入 AutoSolve 的工具集，不再只筛 WaterPlan 候选。
@@ -2780,6 +3130,7 @@ namespace WaterCalcMod
             r.combos.Add(c);
             r.keep.Add(c);
             r.pick = c;
+            autoComboRaw[c] = ar;
             r.tablets = ar.tablets;
             r.filterUsed = ar.filterDura;
             r.uvUsed = c.uv ? 1 : 0;
@@ -2813,7 +3164,103 @@ namespace WaterCalcMod
                 nr.purityBp = shownBp;
                 r.nights.Add(nr);
             }
+            // 玩家 2026-11-16：不要按固定百分比硬切，直接扫水量找每一档「道具消耗刚好到目标」的上边界。
+            // 同一个道具组合（药片/滤棉/紫外/海德拉/晚数）只保留仍达标的最高水量，
+            // 这样更多方案里会出现「6000 五药 / 5500 四药 / 5000 三药…」这种不同水量档。
+            if (searchFeed && realWater == null && r.pick != null && capUl >= 1000000L)
+            {
+                double shadow0 = AutoSolve.TabletShadow;
+                AutoSolve.UseUiCost();
+                AutoSolve.TabletShadow = (mode == 2 && PostMode == 0)
+                    ? TabletShadowForStock(tabletStock) : 0.0;
+                try
+                {
+                    int nightsForScan = Math.Max(1, ar.nights);
+                    long step = Math.Max(500000L, capUl / 12L);
+                    var groups = new Dictionary<string, WaterPlan.Combo>();
+                    for (long f = capUl; f >= 1000000L; f -= step)
+                    {
+                        var rr = AutoSolve.Solve(f, purityBp, perf, (double)q, targetBp,
+                            nightsForScan, allowFilter, allowUv, allowTablet, allowHydra,
+                            tabletStock, filterDurMax, hydraDuraMax);
+                        if (rr == null || !rr.ok || rr.w == null || rr.w.v <= 0) continue;
+                        if ((int)Math.Round(rr.purityShown * 100.0) < targetBp) continue;
+                        if (rr.feedUl > f + 1000L) continue;
+                        if (forceHydra && !HasAutoTool(rr, "portable")) continue;
+                        string group = rr.tablets + "|" + (HasAutoTool(rr, "filter") ? 1 : 0)
+                                     + "|" + (HasAutoTool(rr, "uv") ? 1 : 0)
+                                     + "|" + (HasAutoTool(rr, "portable") ? 1 : 0)
+                                     + "|" + rr.nights;
+                        // f 从大到小扫，第一次遇到这个组合就是它的最高可行水量。
+                        if (groups.ContainsKey(group)) continue;
+                        var c2 = new WaterPlan.Combo();
+                        c2.label = f + " / " + rr.w.v;
+                        c2.filter = HasAutoTool(rr, "filter");
+                        c2.uv = HasAutoTool(rr, "uv");
+                        c2.tablets = rr.tablets;
+                        c2.feedUl = rr.feedUl > 0 ? rr.feedUl : f;
+                        c2.outUl = rr.w.v;
+                        c2.filterUsed = rr.filterDura;
+                        c2.purityBp = (int)Math.Round(rr.purityShown * 100.0);
+                        c2.cost = rr.cost + AutoSolve.ElectricityPerNight * rr.nights;
+                        c2.ok = true;
+                        c2.nights = rr.nights;
+                        c2.hydra = HasAutoTool(rr, "portable");
+                        c2.hydraDur = rr.hydraDura;
+                        groups[group] = c2;
+                        autoComboRaw[c2] = rr;
+                    }
+                    int added = 0;
+                    foreach (var kv in groups)
+                    {
+                        if (added >= 5) break;
+                        var c2 = kv.Value;
+                        bool dup = false;
+                        for (int ci = 0; ci < r.combos.Count; ci++)
+                            if (r.combos[ci] != null && r.combos[ci].feedUl == c2.feedUl) { dup = true; break; }
+                        if (dup) continue;
+                        r.combos.Add(c2);
+                        r.keep.Add(c2);
+                        added++;
+                    }
+                }
+                catch (Exception) { }
+                finally { AutoSolve.TabletShadow = shadow0; }
+            }
             autoReportKey = key;
+            // 玩家 2026-11-16：设置「用机器」只代表允许用机器，不是强制。
+            // 同一瓶水在 0 晚用「过滤+药片」已经能达标时，即使总净赚不如净化器方案，
+            // 也要作为一条可选方案放进「更多方案」，不能让它完全消失。
+            if (r.pick != null && r.pick.nights > 0 && !forceHydra)
+            {
+                AutoSolve.Result nm = null;
+                bool oldMachine = AutoSolve.AllowMachine;
+                double oldShadow = AutoSolve.TabletShadow;
+                try
+                {
+                    AutoSolve.AllowMachine = false;
+                    AutoSolve.TabletShadow = 0.0;
+                    if (realWater != null && realWater.v > 0)
+                        nm = AutoSolve.SolveWater(realWater, perf, (double)q, targetBp, 1,
+                                                  allowFilter, allowUv, allowTablet,
+                                                  allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                    else
+                        nm = AutoSolve.Solve(c.feedUl, purityBp, perf, (double)q, targetBp, 1,
+                                             allowFilter, allowUv, allowTablet,
+                                             allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                }
+                catch (Exception) { nm = null; }
+                finally
+                {
+                    AutoSolve.AllowMachine = oldMachine;
+                    AutoSolve.TabletShadow = oldShadow;
+                }
+                if (nm != null && nm.ok && nm.nights == 0 && nm.w != null && nm.w.v > 0)
+                {
+                    var c2 = ComboFromAuto(nm, c.feedUl);
+                    if (AddComboUnique(r, c2)) autoComboRaw[c2] = nm;
+                }
+            }
             autoReportCache[key] = r;
             autoRawResults[r] = ar;
             Log("[auto] search=" + (searchFeed ? "25+6" : "fixed") + " feed=" + c.feedUl +
@@ -2892,7 +3339,8 @@ namespace WaterCalcMod
             if (volUl0 <= 0 && capEmpty > 0)
             {
                 int pur0 = CustomPur > 0 ? CustomPur : pur;
-                if (pur0 <= 0) pur0 = 9100;
+                // 读不到水源就当作空，不再拿 91.00 去硬算。
+                if (pur0 <= 0) return null;
                 return BuildOneNightOrCap(capEmpty, pur0, perf, q, targetBp,
                                           srcName, GameBridge.NameOfItem(b),
                                           Mode, PreMode, PostMode,
@@ -2904,7 +3352,8 @@ namespace WaterCalcMod
             if (volUl0 > 0 && capEmpty > 0 && WaterPlan.NightCap > 1)
             {
                 int pur0 = CustomPur > 0 ? CustomPur : pur;
-                if (pur0 <= 0) pur0 = 9100;
+                // 读不到水源就当作空，不再拿 91.00 去硬算。
+                if (pur0 <= 0) return null;
                 return BuildOneNightOrCap(capEmpty, pur0, perf, q, targetBp,
                                           srcName, GameBridge.NameOfItem(b),
                                           Mode, PreMode, PostMode,
@@ -2984,9 +3433,29 @@ namespace WaterCalcMod
             for (int i = 0; i < r.combos.Count; i++)
             {
                 var c = r.combos[i];
-                if (c != null && c.ok && c.label == ManualPickLabel) { r.pick = c; return; }
+                if (c != null && c.ok && c.label == ManualPickLabel) { r.pick = c; SyncReportPick(r, c); return; }
             }
             ManualPickLabel = null;   // 换瓶/换水源后旧方案不存在了，自动回到自动选
+        }
+
+        /// <summary>把 Report 顶层字段同步到当前选中的方案；否则方案表点了另一条，
+        /// 主页/步骤还拿旧方案的耗材和出水量。</summary>
+        private static void SyncReportPick(WaterPlan.Report r, WaterPlan.Combo c)
+        {
+            if (r == null || c == null) return;
+            r.pick = c;
+            r.tablets = c.tablets;
+            r.filterUsed = c.filterUsed;
+            r.uvUsed = c.uv ? 1 : 0;
+            r.outUl = c.outUl;
+            r.finalBp = c.purityBp;
+            r.cost = c.cost;
+            r.nightsCount = c.nights;
+            r.needUl = c.feedUl;
+            r.useUl = c.feedUl;
+            r.bestUl = c.feedUl;
+            r.leftUl = 0L;
+            r.perL = c.outUl > 0 ? c.cost / (c.outUl / 1000000.0) : 0.0;
         }
 
         /// <summary>诊断：列出参与整瓶凑量的容器（背包/台面/机器里的都算），
@@ -3412,6 +3881,17 @@ namespace WaterCalcMod
                 if (srcWin == null)
                 {
                     var st = new MachineryStack(true, 4);
+                    // 具体挡位直接写在按钮上：铁锈/沟渠各自读今日 StoreStation 真值。
+                    int rp0 = 0, gp0 = 0;
+                    try
+                    {
+                        var s0 = StoreStation.Instance;
+                        if (s0 != null) { rp0 = s0.todayRustwaterPurity; gp0 = s0.todayGutterflowPurity; }
+                    }
+                    catch (Exception) { }
+                    st.Add(new MachineryText("今日 铁锈 " + (TapPurLooksValid(4, rp0) ? PlanText.Pct(rp0) : "读不到")
+                                           + "   沟渠 " + (TapPurLooksValid(5, gp0) ? PlanText.Pct(gp0) : "读不到"),
+                                           9, HorizontalAlignmentOptions.Left, false));
                     int n = SrcPickNames.Length;
                     for (int i = 0; i < n; i += 2)
                     {
@@ -3419,7 +3899,10 @@ namespace WaterCalcMod
                         for (int k = i; k < Math.Min(i + 2, n); k++)
                         {
                             int idx = SrcPickVals[k];
-                            var b = new MachineryButton((idx == SrcIdx ? "▶" : "") + SrcPickNames[k], new Action(delegate
+                            string name = (idx == 1 ? "铁锈 " : "沟渠 ")
+                                        + (idx == 1 ? (TapPurLooksValid(4, rp0) ? PlanText.Pct(rp0) : "读不到")
+                                                    : (TapPurLooksValid(5, gp0) ? PlanText.Pct(gp0) : "读不到"));
+                            var b = new MachineryButton((idx == SrcIdx ? "▶" : "") + name, new Action(delegate
                             {
                                 SetSrc(idx);
                                 if (srcWin != null) srcWin.Hide();
@@ -3783,13 +4266,19 @@ namespace WaterCalcMod
             }
         }
 
+        /// <summary>步骤页/步骤窗按游戏容器的整数 mL 显示，避免 5348.4 和游戏 5348 差一位。</summary>
+        private static string GameMl(long ul)
+        {
+            return (ul / 1000L).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         private static void FillSteps()
         {
             if (pStepList == null) return;
             var b = new RichTextBuilder(240);
             try
             {
-                var r = CurrentPlan(true);
+                var r = CurrentPlan(false);
                 if (r == null) { AddLine(b, "还没有可用方案：先放一个装水的容器", ColorPalette.LightOrange, false); pStepList.SetRichText(b, 4000); return; }
                 var c = r.pick;
                 int done = progressActive ? progressDoneSteps : 0;
@@ -3820,18 +4309,18 @@ namespace WaterCalcMod
                 long startV = 0;
                 if (w == null) w = WaterMath.Build(feed, r.srcBp); else startV = w.v;
                 int idx = 1;
-                if (startV > 0) AddLine(b, idx + ". 现有 " + WaterPlan.Ml(startV) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
-                else AddLine(b, idx + ". 接水 " + WaterPlan.Ml(feed) + " mL  " + PlanText.Pct(r.srcBp), ColorPalette.LightGray, false);
+                if (startV > 0) AddLine(b, idx + ". 现有 " + GameMl(startV) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
+                else AddLine(b, idx + ". 接水 " + GameMl(feed) + " mL  " + PlanText.Pct(r.srcBp), ColorPalette.LightGray, false);
                 if (c != null && c.filter && doneFilter <= 0)
                 {
                     WaterMath.Filter(w, 400);
-                    AddLine(b, (++idx) + ". 过滤棉 → " + WaterPlan.Ml(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
+                    AddLine(b, (++idx) + ". 过滤棉 → " + GameMl(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
                 }
                 if (c != null && c.uv && doneUv <= 0)
                 {
                     // 紫外灯是工具：一次照过、体积不变、不计次数（玩家明确要求）
                     WaterMath.Uv(w, 1);
-                    AddLine(b, (++idx) + ". 紫外灯 → " + WaterPlan.Ml(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
+                    AddLine(b, (++idx) + ". 紫外灯 → " + GameMl(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
                 }
                 // 注意：Purify 的 perf 是「百分比原值」（25 就传 25），不是 1.25；
                 // 之前这里传了 1+perf/100，导致步骤纯度比方案表低 0.47。
@@ -3839,13 +4328,13 @@ namespace WaterCalcMod
                 for (int n = 0; n < remainNights; n++)
                 {
                     WaterMath.Purify(w, perf, q);
-                    AddLine(b, (++idx) + ". 净水器 1 晚 → " + WaterPlan.Ml(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
+                    AddLine(b, (++idx) + ". 净水器 1 晚 → " + GameMl(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
                 }
                 int remainTabs = c == null ? 0 : Math.Max(0, c.tablets - doneTabs);
                 if (remainTabs > 0)
                 {
                     WaterMath.Tablet(w, remainTabs);
-                    AddLine(b, (++idx) + ". " + remainTabs + " 片药片 → " + WaterPlan.Ml(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
+                    AddLine(b, (++idx) + ". " + remainTabs + " 片药片 → " + GameMl(w.v) + " mL  " + PlanText.Pct(w.Purity), ColorPalette.LightGray, false);
                 }
                 if (c != null)
                 {
@@ -3949,6 +4438,14 @@ namespace WaterCalcMod
                         modeRow.Add(mb);
                     }
                     st.Add(modeRow);
+                    // 玩家 2026-11-16：无限道具不能只靠“同档再点”藏起来；设置页给一个明确开关。
+                    infBtn = new MachineryButton((InfiniteTools ? "▶" : "") + "无限道具", new Action(delegate
+                    {
+                        ToggleInfinite("设置页无限开关");
+                        RefreshModeDesc();
+                        RequestRebuild();
+                    }), 92, 18);
+                    st.Add(infBtn);
                     // 药片：暂时用「+1 / -1」两个小键（数字输入框还没找到可复用的原生控件）
                     var tabRow = new MachineryStack(false, 4);
                     tabRow.Add(new MachineryButton("-1", new Action(delegate { SetPost(Math.Max(1, PostMode <= 0 ? 1 : PostMode - 1)); }), 28, 18));
@@ -4421,6 +4918,7 @@ namespace WaterCalcMod
         /// <summary>切页＝只切四个页容器的可见性 + 改窗口高度，绝不重建控件、绝不 Detach/Attach。</summary>
         private static void SetPage(int page)
         {
+            int prevPage = UiPage;
             if (UiPage == page) page = 0;   // 再点一次同页＝返回主页
             UiPage = page;
             if (page == 4 && (calcOwner == null || !ReferenceEquals(calcOwner, settingsOwner)
@@ -4432,8 +4930,9 @@ namespace WaterCalcMod
                 SyncCalcBottleOnEnter();
                 RefreshCalcLabels();
             }
-            // 步骤页也按当前方案重画：切档/接水后在主页看不到步骤页的旧目标。
-            if (page == 3) Rebuild(true);
+            // 玩家 2026-11-16：切到步骤页只重绑已有方案；不能在这里 Rebuild(true)，
+            // 否则每次点「步骤」都会重新算一遍，放药后的水量变化会把方案换掉。
+            // 步骤页内容由下面的 BindModel 用同一份 Model 重画。
             // 玩家 2026-11-13：只有点进「混水」页才扫描背包（其它页一律不扫）。
             if (page == 5) RefreshMixPage();
             try
@@ -4450,7 +4949,9 @@ namespace WaterCalcMod
             BindModel(Model != null ? Model : ModelFor(false), true);
             // 玩家 2026-11-13：设置页改设备后切回主页，主页必须立刻按新开关重算/重绑。
             // SetPage 原来只把旧 Model 重新绑一遍文字，设备开关的改动要等下一次 Tick，常常看不到。
-            if (page == 0)
+            // 玩家 2026-11-16：从计算/混水/步骤切回主页时，不要每次强制重算；
+            // 只有从设置页回来才需要按新开关重算。否则刚放下的药会把方案重锁成“先补”。
+            if (page == 0 && prevPage == 1)
             {
                 lastLiveSig = null;
                 Rebuild(true);
@@ -5145,17 +5646,33 @@ namespace WaterCalcMod
                 try
                 {
                     // 玩家主动取消选择时，即使机器窗口还开着，混水页也回到背包 1+1，不能继续按那台机器算。
+                    // 机器窗口开着时只认当前选中槽；槽空就按没有机器瓶处理，不能再用 CtxBottle 撑旧方案。
                     if (!uiDeselected)
                     {
-                        machineB = GameBottle();
-                        if (machineB == null) machineB = CtxBottle();
+                        // 混水页要能读到「净水器槽里已有液体」，不能只认点了绿点的配对：
+                        // 机器窗口开着但还没点选时，PlanBottle() 会返回 null，
+                        // 于是顶部没有当前机器水、下面扫描又按机器槽排掉，整瓶水就“消失”了。
+                        if (MachineOpen())
+                        {
+                            machineB = PlanBottle();
+                            if (machineB == null && !uiDeselected)
+                                machineB = AnyVisibleMachineBottle();
+                        }
+                        else machineB = CtxBottle();
                     }
                 }
                 catch (Exception e) { Log("[mix] 取机器瓶失败 " + e.GetType().Name + " " + e.Message); }
                 var groups = ScanMixGroups(out tapBp, out note, machineB);
-                long capUl = calcCapUl;
+                long capUl = 0L;
+                if (machineB != null)
+                {
+                    try { capUl = WaterHelper.GetTotalCapacity(machineB); } catch (Exception) { capUl = 0L; }
+                }
+                if (capUl <= 0) capUl = calcCapUl;
                 for (int i = 0; i < groups.Count; i++) capUl = Math.Max(capUl, groups[i].capUl);
-                var rows = BuildMixRows(groups, tapBp, capUl);
+                // 玩家 2026-11-16：混水方案不再按当前容器容量截断；能兑多少就兑到阈值，
+                // 750 mL 基础水可以全部进方案，输出超过 6L 时由玩家分瓶倒。
+                var rows = BuildMixRows(groups, tapBp, long.MaxValue);
                 var b = new RichTextBuilder(500);   // 玩家 2026-11-13（第六轮）：行尾要带纯度，行宽放宽避免「已有 基础水 5932.5mL / 98.86%」折成两行
                 int lines = 0;
                 if (machineB != null)
@@ -5817,6 +6334,8 @@ namespace WaterCalcMod
                 LastMsg = "沟渠水龙头未解锁：沟渠方案可以算，但接水会被拦住";
             else if (k == 1 && !rustOpen)
                 LastMsg = "铁锈水龙头未解锁：铁锈方案可以算，但接水会被拦住";
+            else if (k == 0)
+                LastMsg = "";   // 切回自动时清掉上一次“铁锈未解锁”的残留提示
             CustomPur = -1;
             SrcIdx = (k == 0 ? 0 : k);
             Log("[ui] src chip=" + SrcChipNames[k < 4 && k >= 0 ? k : 0] + " idx=" + SrcIdx);
@@ -6161,7 +6680,9 @@ namespace WaterCalcMod
             // 再按同一个键＝按无限道具算，再按＝回真实。开关是全局的（Q2）。
             // 玩家 2026-11-15：标题栏同档再点仍保留「切无限道具」；但切到另一个档会回真实道具，
             // 避免从效率无限切到性价比时继续按 50 L 满容量算，看不到真正要倒出多少。
-            bool sameMode = allowInfiniteToggle && (Mode == i) && !UncapEff;
+            // 玩家 2026-11-16：点「性价比」是要按性价比重算，不是把同一档再点成「无限道具」。
+            // 但同档再点仍要能切无限：效率档和性价比档都保留这个入口；切到另一个档时回真实道具。
+            bool sameMode = allowInfiniteToggle && (Mode == i) && !UncapEff && (i == 1 || i == 2);
             UncapEff = false;
             Mode = i; ManualPickLabel = null; Log("[ui] mode=" + i + (sameMode ? " (same -> toggle道具口径)" : ""));
             hydraOnce = false;
@@ -6330,10 +6851,12 @@ namespace WaterCalcMod
             return own > 0 ? own : WaterPlan.HydraDuraCap;
         }
 
-        /// <summary>传给 AutoSolve 的海德拉耐久预算：无限道具口径必须 0=不限。</summary>
+        /// <summary>传给 AutoSolve 的海德拉耐久预算：无限道具口径 0=不限；真实背包按持有耐久，不再默认 60。</summary>
         private static int HydraDuraMaxForSolve(bool infinite)
         {
-            return infinite ? 0 : WaterPlan.HydraDuraCap;
+            if (infinite) return 0;
+            int own = HydraDurShown();
+            return own > 0 ? own : 1;   // 0 在求解器里表示不限，没海德拉时给 1 点，配合 allowHydra=false 不会出方案
         }
 
         private static void RefreshHydraDurLabel()
@@ -6434,6 +6957,50 @@ namespace WaterCalcMod
                 if (st != null && st.tool == "tablet") total += Math.Max(1, st.count);
             }
             return total;
+        }
+
+        /// <summary>锁定后背包里少了几片药。药片可以比过滤先用，不能用“前缀到第几步”表示。</summary>
+        private static int TabletUsedSinceLock(bool forceRefresh)
+        {
+            int total = PlanTabletTotal();
+            if (total <= 0) return 0;
+            int used = progressTabletUsed;
+            if (lockedTabletCount > 0)
+            {
+                try
+                {
+                    if (forceRefresh)
+                    {
+                        // OwnedTools 有 6 秒缓存；刚放下一片药时缓存还是旧数量，
+                        // 会把“已用 1 片”读成 0，随后方案就被重算成带补水的新方案。
+                        ownCache = null;
+                        ownTime = -999f;
+                    }
+                    var o = OwnedTools();
+                    int tabNow = o == null ? lockedTabletCount : o.tablets;
+                    int byStock = lockedTabletCount - tabNow;
+                    if (byStock > used) used = byStock;
+                }
+                catch (Exception) { }
+            }
+            if (used < 0) used = 0;
+            if (used > total) used = total;
+            return used;
+        }
+
+        /// <summary>已完成前缀里已经包含几片药，避免和 progressTabletUsed 重复扣。</summary>
+        private static int TabletUsedInPrefix()
+        {
+            var raw = RawResultFor(lockedReport);
+            if (raw == null || raw.rawSteps == null) return 0;
+            int n = Math.Min(progressDoneSteps, raw.rawSteps.Count);
+            int used = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var st = raw.rawSteps[i];
+                if (st != null && st.tool == "tablet") used += Math.Max(1, st.count);
+            }
+            return used;
         }
         public static string SrcPlanPublic() { int g, p; TodaySource(out g, out p); int perf, q; Bonuses(out perf, out q); int tb = PlanText.TargetBp(TargetIdx, q); var r = WaterPlan.Build(2000000L, p, perf, q, tb, SrcNames[Math.Max(0, Math.Min(SrcIdx, SrcNames.Length - 1))], "空瓶 2000 mL", true, Mode, PreMode, PostMode); if (r == null) return "srcplan -> none"; return "srcplan -> " + SrcNames[Math.Max(0, Math.Min(SrcIdx, SrcNames.Length - 1))] + " @" + PlanText.Pct(p) + " 接 " + (r.ShownUl()/1000) + " mL → 出 " + (r.pick == null ? 0 : r.pick.outUl/1000) + " mL  " + (r.pick == null ? "—" : PlanText.Pct(r.pick.purityBp)) + "（" + (r.pick == null ? "无方案" : r.pick.label) + "）"; }
         public static string SrcPublic() { int g, p; TodaySource(out g, out p); return "src -> idx=" + SrcIdx + " name=" + SrcNames[Math.Max(0, Math.Min(SrcIdx, SrcNames.Length - 1))] + " grade=" + g + " purity=" + PlanText.Pct(p); }
@@ -7389,6 +7956,13 @@ namespace WaterCalcMod
                     else if (!noBox && !doneOk && !capDead && r != null && r.pick != null)
                     {
                         stepTxt = "步骤 " + RawStepsChain(r);
+                        // 旧版「换方案」可能在上一次解锁时留下；现在只有一条达标解就把它收掉，
+                        // 避免主页写着换方案、更多方案页却只有当前一行。
+                        if (compareText != null && compareText.Length > 0)
+                        {
+                            var altsNow = r.TableRows(5);
+                            if (altsNow == null || altsNow.Count < 2) compareText = "";
+                        }
                         if (compareText != null && compareText.Length > 0) stepTxt += "\n" + compareText;
                         string nightTip = NightUpHintFor(r);
                         if (nightTip.Length > 0) stepTxt += "\n" + nightTip;
@@ -7516,16 +8090,17 @@ namespace WaterCalcMod
                     lastRows = (rows2 != null && rows2.Count > 0) ? rows2.ToArray() : null;
                     if (pTableHead != null)
                     {
-                        string head = "点一行就选中";
-                        if (r != null && r.filterEmpty) head += " ｜ 前后置凑不出，按自动给";
-                        if (r != null)
+                        bool onlyOne = rows2 != null && rows2.Count == 1;
+                        string head = onlyOne ? "当前只有这一套达标方案" : "点一行就选中";
+                        if (!onlyOne && r != null && r.filterEmpty) head += " ｜ 前后置凑不出，按自动给";
+                        if (!onlyOne && r != null)
                         {
                             string th2 = r.TabletHint();
                             if (!string.IsNullOrEmpty(th2)) head += " ｜ " + (th2.Length > 34 ? th2.Substring(0, 34) + "…" : th2);
                         }
                         try { SetT(pTableHead, head); } catch (Exception) { }
-                        // 规范 3.3：已有选中方案时「点一行就选中」已完成使命，整行收起；无选中时再提示。
-                        SetVisible(pTableHead, r == null || r.pick == null);
+                        // 只有一条时明确写“没有更多”，不要再让玩家以为下面还有方案可翻。
+                        SetVisible(pTableHead, onlyOne || r == null || r.pick == null);
                     }
                     if (pRowBtns != null)
                     {
@@ -7561,7 +8136,10 @@ namespace WaterCalcMod
                             double net = WaterEconomy.Profit(c.outUl, c.purityBp, c.cost);
                             string money = (net >= 0 ? "+" : "-") + WaterEconomy.Money(Math.Abs(net));
                             string moneyCol = net >= 0 ? "F2C14E" : PlanText.C_WARN;   // 规范 3.3：正收益 Gold，亏损仍旧暖红
+                            // 玩家 2026-11-16：更多方案右侧补「每升价格」，方便直接比性价比。
+                            double perL = c.outUl > 0 ? c.cost / (c.outUl / 1000000.0) : 0;
                             try { SetB(btn, WaterPlan.Ml(c.outUl) + GAP + PlanText.Pct(c.purityBp) + GAP
+                                            + "每升" + WaterEconomy.Money(perL) + GAP
                                             + PlanText.Rich(moneyCol, money)); } catch (Exception) { }
                             // 玩家 2026-11-13：方案表右块只留一行「实际出水 + 纯度 + 净赚」。
                             // 以前 SetDesc 又塞一整行「纯度 耗材 本钱 卖价 净赚」，按钮被撑成两行，
@@ -7588,7 +8166,8 @@ namespace WaterCalcMod
                         // 玩家 2026-11-14：步骤页不能只抄方案表——瓶里水多于方案目标时要先倒，
                         // 少于目标时要写“需接水还差多少”，否则步骤页会一直显示旧目标。
                         long haveMl = 0L;
-                        var stepBottle = CtxBottle();
+                        var stepBottle = calcManualSource ? ExplicitPickBottle() : PlanBottle();
+                        if (stepBottle == null) stepBottle = CtxBottle();
                         if (stepBottle == null) stepBottle = GameBottle();
                         long stepCapUl = 0L;
                         if (stepBottle != null)
@@ -7611,7 +8190,7 @@ namespace WaterCalcMod
                             long mixAddUl = r.fromWater && r.water0 != null ? r.water0.v - haveMl * 1000L : 0L;
                             if (mixAddUl >= 1000L)
                             {
-                                AddLine(b, "混合 补 " + WaterPlan.Ml(mixAddUl) + " mL 水管水 → "
+                                AddLine(b, "混合 补 " + GameMl(mixAddUl) + " mL 水管水 → "
                                         + PlanText.Pct(r.srcBp), ColorPalette.LightOrange, true);
                             }
                             else if (haveMl > pourMl)
@@ -7634,8 +8213,14 @@ namespace WaterCalcMod
                                     ColorPalette.LightGray, false);
                         }
 
-                        AddLine(b, "水质 " + PlanText.Pct(r.srcBp), ColorPalette.LightCyan, false);
-                        AddLine(b, "出水 " + WaterPlan.Ml(r.ChosenOutUl()) + " mL", ColorPalette.White, false);
+                        int stepBp = r.srcBp;
+                        if (stepBottle != null && haveMl > 0)
+                        {
+                            try { int curBp = WaterHelper.GetWaterPurity(stepBottle); if (curBp > 0) stepBp = curBp; }
+                            catch (Exception) { }
+                        }
+                        AddLine(b, "水质 " + PlanText.Pct(stepBp), ColorPalette.LightCyan, false);
+                        AddLine(b, "出水 " + GameMl(r.ChosenOutUl()) + " mL", ColorPalette.White, false);
                         AddLine(b, "纯度 " + PlanText.Pct(r.ChosenOutBp()), ColorPalette.LightCyan, false);
                         AddLine(b, WaterPlan.NoMachine ? "不用净水器" : "性能 +" + r.perf + "%" + GAP + "质量 " + r.q,
                             ColorPalette.LightGray, false);
@@ -7681,7 +8266,7 @@ namespace WaterCalcMod
                                 title += "  耐久" + stp.dura;
                             b.Add(title, ColorPalette.White, "\n");
                             b.Add("    → ", ColorPalette.LightGray);
-                            b.Add(WaterPlan.Ml(stp.volUl), ColorPalette.LightCyan);
+                            b.Add(GameMl(stp.volUl), ColorPalette.LightCyan);
                             b.Add("  ", ColorPalette.LightGray);
                             b.Add(PlanText.Pct((int)Math.Round(stp.purity * 100.0)), ColorPalette.LightGreen);
                             b.Add("\n", ColorPalette.White);
@@ -8534,36 +9119,57 @@ namespace WaterCalcMod
 
         /// <summary>最近一次 TapSource 失败的原因（给面板说清楚：没解锁 / 读不到）。</summary>
         private static string tapBlock;
+        /// <summary>最近一次 TapSource 实际走的水管：4=铁锈、5=沟渠。只用于显示，不参与 AddWater 的 grade=1。</summary>
+        private static int tapKind;
+
+        // 游戏 StoreStation.StartDay() 的今日水质生成范围（反编译确认）：
+        //   todayGutterflowPurity = RNG.GetRandomInt(8000, 8999);  // 80.00% ~ 89.99%
+        //   todayRustwaterPurity  = RNG.GetRandomInt(9000, 9150);  // 90.00% ~ 91.50%
+        // 这里只用它来校验“读到的值是不是游戏合法值”，不把任何具体纯度写死。
+        private const int GutterPurMin = 8000, GutterPurMax = 8999;
+        private const int RustPurMin = 9000, RustPurMax = 9150;
+
+        private static bool TapPurLooksValid(int kind, int pur)
+        {
+            if (pur <= 0) return false;
+            if (kind == 5) return pur >= GutterPurMin && pur <= GutterPurMax;
+            if (kind == 4) return pur >= RustPurMin && pur <= RustPurMax;
+            return false;
+        }
 
         private static void TapSource(out int grade, out int pur)
         {
             grade = 1; pur = 0;                       // 水龙头两个分支的 grade 都是 1
+            tapKind = 0;
             tapBlock = null;
             try
             {
                 var st = StoreStation.Instance;
                 if (st == null) { tapBlock = "StoreStation 未就绪"; return; }
                 // ★玩家反馈：选了「沟渠水」还是接铁锈水 —— 以前这里永远先取铁锈水，水源下拉等于没接。
-                // 现在按 SrcIdx 取对应那只水龙头：1=铁锈水、2=沟渠水，其余（自动）保持先铁锈后沟渠。
+                // 现在按 SrcIdx 取对应那只水龙头：1=铁锈水、2=沟渠水，其余（自动）先沟渠后铁锈。
                 // ★2026-11-09 第二报：沟渠水还能「凭空接出来」——必须像原版一样先查解锁，
                 //   否则没买沟渠水龙头的存档也能灌出沟渠水。
                 bool rust = TapUnlocked("RUSTWATER_TAP");
                 bool gutter = TapUnlocked("GUTTERFLOW_TAP");
                 if (SrcIdx == 2)
                 {
-                    if (gutter && st.todayGutterflowPurity > 0) { pur = st.todayGutterflowPurity; return; }
-                    tapBlock = gutter ? "沟渠水龙头读不到今日纯度" : "沟渠水龙头还没解锁";
+                    if (gutter && TapPurLooksValid(5, st.todayGutterflowPurity)) { pur = st.todayGutterflowPurity; tapKind = 5; return; }
+                    tapBlock = gutter ? "沟渠水龙头读到的值不在 80.00%~89.99% 合法范围" : "沟渠水龙头还没解锁";
                     return;
                 }
                 if (SrcIdx == 1)
                 {
-                    if (rust && st.todayRustwaterPurity > 0) { pur = st.todayRustwaterPurity; return; }
-                    tapBlock = rust ? "铁锈水龙头读不到今日纯度" : "铁锈水龙头还没解锁";
+                    if (rust && TapPurLooksValid(4, st.todayRustwaterPurity)) { pur = st.todayRustwaterPurity; tapKind = 4; return; }
+                    tapBlock = rust ? "铁锈水龙头读到的值不在 90.00%~91.50% 合法范围" : "铁锈水龙头还没解锁";
                     return;
                 }
-                if (rust && st.todayRustwaterPurity > 0) { pur = st.todayRustwaterPurity; return; }
-                if (gutter && st.todayGutterflowPurity > 0) { pur = st.todayGutterflowPurity; return; }
-                tapBlock = (rust || gutter) ? "水龙头读不到今日纯度" : "水龙头还没解锁";
+                // 自动档完全照游戏 WaterHelper 的 IsFaucet 分支：
+                // 铁锈水管解锁 -> 接铁锈；否则沟渠水管解锁 -> 接沟渠。
+                // 所以开了沟渠只接得到沟渠，升级成铁锈后只接得到铁锈；不会拿另一只的浓度。
+                if (rust && TapPurLooksValid(4, st.todayRustwaterPurity)) { pur = st.todayRustwaterPurity; tapKind = 4; return; }
+                if (gutter && TapPurLooksValid(5, st.todayGutterflowPurity)) { pur = st.todayGutterflowPurity; tapKind = 5; return; }
+                tapBlock = (rust || gutter) ? "水龙头读到的值不在游戏合法范围" : "水龙头还没解锁";
             }
             catch (Exception) { tapBlock = "读水龙头出错"; }
         }
@@ -8584,19 +9190,34 @@ namespace WaterCalcMod
                 {
                     int v = WaterHelper.GetTotalVolume(b0);
                     int pp = WaterHelper.GetWaterPurity(b0);
-                    if (v > 0 && pp > 0) { grade = 4; pur = pp; return; }
+                    if (v > 0 && pp > 0)
+                    {
+                        // 瓶里已经有水：纯度就按这瓶水本身算；档位文案尽量按它与今日两只水管的
+                        // 实际纯度对一下，避免明明灌的是沟渠水却写「铁锈水」。
+                        grade = 0;
+                        try
+                        {
+                            var st0 = StoreStation.Instance;
+                            if (st0 != null)
+                            {
+                                int rp = st0.todayRustwaterPurity;
+                                int gp = st0.todayGutterflowPurity;
+                                if (rp > 0 && Math.Abs(pp - rp) <= 5) grade = 4;
+                                else if (gp > 0 && Math.Abs(pp - gp) <= 5) grade = 5;
+                            }
+                        }
+                        catch (Exception) { }
+                        pur = pp;
+                        return;
+                    }
                 }
             }
             catch (Exception) { }
             TapSource(out grade, out pur);
-            grade = 4;
-            try
-            {
-                var st = StoreStation.Instance;
-                if (st != null && st.todayRustwaterPurity <= 0 && st.todayGutterflowPurity > 0) grade = 5;
-            }
-            catch (Exception) { }
-            if (pur <= 0) pur = 9100;   // 仅用于估算/文案；真正灌水走 TapSource，读不到会直接拒绝
+            // TapSource 的 grade 必须保持 1（AddWater 原版参数）；这里只把显示档位换成铁锈/沟渠。
+            grade = tapKind > 0 ? tapKind : 0;
+            // 读不到就返回 0，当作空；不沿用上次水源，也不自己造 91。
+            // 空瓶时玩家自己选铁锈/沟渠，各自的今日纯度由 SrcSource 直接读取。
         }
 
         /// <summary>手动指定水源：铁锈水/沟渠水取今日真值，纯水类的纯度按引擎液体定义。</summary>
@@ -8615,6 +9236,8 @@ namespace WaterCalcMod
                     case 5: grade = 0; pur = 9990; break;   // 纯水
                     default: return false;
                 }
+                // 水龙头两档必须落在游戏 StartDay 的生成范围内，否则当作没读到。
+                if ((idx == 1 || idx == 2) && !TapPurLooksValid(grade, pur)) pur = 0;
             }
             catch (Exception) { return false; }
             if (pur <= 0) return false;
@@ -8696,19 +9319,56 @@ namespace WaterCalcMod
             return na == nb && ca == cb;
         }
 
+        /// <summary>当前选中的机器配对：优先 activeIdx，但 activeIdx 可能指向已关闭的旧窗口；
+        /// 旧窗口的 BottleInv 会保留旧容器，导致空槽仍读出旧瓶（P5）。</summary>
+        private static PurifierHook.Pair ActivePair()
+        {
+            if (uiDeselected) return null;
+            var pairs = PurifierHook.Pairs;
+            // 先按当前全局窗口从「最新配对」往前找：窗口关掉再开时 Pairs 会留下旧配对，
+            // 旧配对的 BottleInv 仍挂着旧容器，activeIdx 一旦没刷新就会读回旧瓶（P5）。
+            PurifierHook.Pair sameWindow = null;
+            for (int i = pairs.Count - 1; i >= 0; i--)
+            {
+                var p = pairs[i];
+                if (p == null || !ReferenceEquals(p.Window, PurifierHook.MachineWindow)) continue;
+                if (!PurifierHook.WindowVisible(p.Window)) continue;
+                if (PurifierHook.PairSelected(p)) return p;
+                // 放药片/拖动库存会短暂让 PairSelected 变 false，但机器窗口还是同一台。
+                // 这时不能当作“没容器”去解锁方案，否则每放一片药都会重算成新方案。
+                if (sameWindow == null) sameWindow = p;
+            }
+            if (sameWindow != null) return sameWindow;
+            int idx = activeIdx >= 0 ? activeIdx : MachineOverride;
+            if (idx >= 0 && idx < pairs.Count)
+            {
+                var p = pairs[idx];
+                if (p != null && PurifierHook.WindowVisible(p.Window) && PurifierHook.PairSelected(p)) return p;
+            }
+            return null;
+        }
+
+        /// <summary>当前选中机器槽里的真实容器：认当前配对，不能拿旧配对的 BottleInv。
+        /// 空槽返回 null；空容器仍要走 ItemsOf，不能只认 childItem。</summary>
+        private static GameItem ActiveSlotBottle(object inv)
+        {
+            if (inv == null) return null;
+            try
+            {
+                var item = BottleInMachineSlot(inv);
+                if (item == null) return null;
+                long cap = WaterHelper.GetTotalCapacity(item);
+                return cap > 0 ? item : null;
+            }
+            catch (Exception) { return null; }
+        }
+
         /// <summary>当前选中机器槽里的真实容器；不跨机器兜底。空槽返回 null。</summary>
         private static GameItem ActiveMachineBottle()
         {
-            if (uiDeselected) return null;
-            int idx = activeIdx >= 0 ? activeIdx : MachineOverride;
-            if (idx < 0) return null;
-            var pairs = PurifierHook.Pairs;
-            if (idx >= pairs.Count || pairs[idx] == null || pairs[idx].BottleInv == null) return null;
-            var item = BottleInMachineSlot(pairs[idx].BottleInv);
-            if (item == null) return null;
-            long cap = 0L;
-            try { cap = WaterHelper.GetTotalCapacity(item); } catch (Exception) { }
-            return cap > 0 ? item : null;
+            var p = ActivePair();
+            if (p == null || p.BottleInv == null) return null;
+            return ActiveSlotBottle(p.BottleInv);
         }
 
         private static GameItem GameBottle()
@@ -8718,21 +9378,13 @@ namespace WaterCalcMod
                 // 玩家 2026-11-16：绿点取消后即使用机器窗口还开着，也不能继续按那台机器算；
                 // 没点绿点也不再从 PickedIndex / 第一台可见窗口自动兜底。
                 if (uiDeselected || (activeIdx < 0 && MachineOverride < 0)) return null;
-                // 玩家 2026-11-11：面板写「接 750  容器最多 750」，可实际接水进的是 20 L 那台。
-                // 原因是显示侧读全局上下文里的瓶位（PurifierHook.BottleInv，由「最后可见窗口」写），
-                // 动作侧读玩家点选那台。统一口径：当前在用哪台，就用哪台的瓶位。
-                object inv = null;
-                var pairs = PurifierHook.Pairs;
-                int idx = activeIdx;
-                if (idx < 0) idx = MachineOverride;
-                if (idx >= 0 && idx < pairs.Count && pairs[idx] != null && pairs[idx].BottleInv != null)
-                    inv = pairs[idx].BottleInv;
-                if (inv == null) inv = PurifierHook.BottleInv;
+                // 机器窗口开着：只读当前选中槽，空槽就是空槽，不能再从别的机器/旧配对兜底。
+                if (MachineOpen()) return ActiveMachineBottle();
+                object inv = PurifierHook.BottleInv;
                 if (inv == null) return null;
                 GameItem item = BottleInMachineSlot(inv);
-                // 玩家 2026-11-14：默认选中的那台可能没放容器（0/0），右侧另一台却有 20 L 容器。
-                // 这时方案不该空白：优先找一台真的放了容器的机器，方案按它的容器算。
                 if (item != null && WaterHelper.GetTotalCapacity(item) > 0) return item;
+                var pairs = PurifierHook.Pairs;
                 for (int i = 0; i < pairs.Count; i++)
                 {
                     if (pairs[i] == null || pairs[i].BottleInv == null) continue;
@@ -8798,6 +9450,26 @@ namespace WaterCalcMod
             catch (Exception) { return 0; }
         }
 
+        /// <summary>当前这瓶水按锁定方案还差多少水（µL）：方案要求的总量 - 当前瓶实际水量。
+        /// 只用于 UI 文案，不参与模型；补水已经完成时返回 0，步骤行就不会再写“补”。</summary>
+        private static long CurrentTopUpUl(WaterPlan.Report r)
+        {
+            if (r == null || !r.fromWater || r.pick == null || r.dumpUl > 0 || r.pick.feedUl <= 0) return 0;
+            // 方案已经开始执行（放药、过滤等）后，水少一点不能每步都让玩家补到整瓶；
+            // 补水提示只在方案还没动手时出现。
+            if (progressActive) return 0L;
+            long vol = 0L;
+            try
+            {
+                var b = PlanBottle();
+                if (b != null) vol = WaterHelper.GetTotalVolume(b);
+            }
+            catch (Exception) { vol = 0L; }
+            if (vol <= 0 && r.water0 != null) vol = r.water0.v;
+            long add = r.pick.feedUl - vol;
+            return add >= 1000L ? add : 0L;
+        }
+
         private static string CardFeedValueFor(PanelModel m, WaterPlan.Report r)
         {
             // 玩家 2026-11-12 定案：主界面只留一句核心状态，三种写法，其余解释一律删掉：
@@ -8813,16 +9485,17 @@ namespace WaterCalcMod
             {
                 // 效率档补满容器时，报告里的 water0 是「现有水 + 水管水」的混合体；
                 // 先提示混合，下面的步骤再按混合水跑，不要把这句写成「倒出 0」。
-                long mixedAdd = r.water0 != null ? r.water0.v - m.VolumeMl * 1000L : 0L;
-                if (mixedAdd >= 1000L)
+                // 先补：摘要行只留「补多少 → 补到多少」，步骤行会重复写一次「补」，
+                // 但不再把「混合后…再按步骤」占成两行，避免和步骤行抢解释权。
+                long topUpUl = CurrentTopUpUl(r);
+                if (topUpUl >= 1000L)
                 {
-                    long roomLeft = Max0(m.CapacityMl * 1000L - m.VolumeMl * 1000L);
-                    long addPour = ReachablePour(mixedAdd, roomLeft);
-                    long planTotal = m.VolumeMl * 1000L + addPour;
-                    return PlanText.Lbl("先补 ") + PlanText.Num(WaterPlan.Ml(addPour))
-                         + PlanText.Lbl("（本方案 ") + PlanText.Num(WaterPlan.Ml(planTotal)) + PlanText.Lbl("）水管水，") + "\n"
-                         + PlanText.Lbl("混合后 ")
-                         + PlanText.Pct(r.srcBp) + PlanText.Lbl("，再按步骤");
+                    long planTotal = r.pick != null && r.pick.feedUl > 0
+                                   ? r.pick.feedUl
+                                   : m.VolumeMl * 1000L + topUpUl;
+                    return PlanText.Lbl("补 ") + PlanText.Num(WaterPlan.Ml(topUpUl))
+                         + PlanText.Lbl(" → ") + PlanText.Num(WaterPlan.Ml(planTotal)) + PlanText.Lbl(" mL") + "\n"
+                         + PlanText.Lbl("混合后 ") + PlanText.Pct(r.srcBp);
                 }
                 // 按瓶里这瓶水算（一律用 Report 自己记录的体积，别用面板里可能串台的数字）。
                 if (r.fitUl <= 0)
@@ -8888,13 +9561,50 @@ namespace WaterCalcMod
             b.Add(PlanText.Pct(c.purityBp), ColorPalette.LightCyan);
             double rev = WaterEconomy.Revenue(c.outUl, c.purityBp);
             double profit = rev - c.cost;
+            double perL = c.outUl > 0 ? c.cost / (c.outUl / 1000000.0) : 0;
             b.Add(" 本" + WaterEconomy.Money(c.cost), ColorPalette.LightGray);
+            b.Add(" 每升" + WaterEconomy.Money(perL), ColorPalette.LightGray);
             b.Add(" 赚" + (profit >= 0 ? "+" : "") + WaterEconomy.Money(profit),
                   profit >= 0 ? ColorPalette.LightGreen : ColorPalette.LightOrange);
             b.Add("\n", ColorPalette.White);
         }
 
-        /// <summary>「更多方案」页的行：全部 ok 解，按出水量从大到小，不按前置/后置过滤。</summary>
+        /// <summary>把一条方案去重后加入 Report 的 combos/keep，供「更多方案」显示。</summary>
+        private static bool AddComboUnique(WaterPlan.Report r, WaterPlan.Combo c)
+        {
+            if (r == null || c == null || !c.ok) return false;
+            for (int i = 0; i < r.combos.Count; i++)
+            {
+                var q = r.combos[i];
+                if (q != null && SameCombo(q, c)) return false;
+            }
+            r.combos.Add(c);
+            r.keep.Add(c);
+            return true;
+        }
+
+        private static WaterPlan.Combo ComboFromAuto(AutoSolve.Result ar, long fallbackFeedUl)
+        {
+            var c = new WaterPlan.Combo();
+            c.label = (ar.feedUl > 0 ? ar.feedUl : fallbackFeedUl) + " / " + ar.w.v;
+            c.filter = HasAutoTool(ar, "filter");
+            c.uv = HasAutoTool(ar, "uv");
+            c.tablets = ar.tablets;
+            c.feedUl = ar.feedUl > 0 ? ar.feedUl : fallbackFeedUl;
+            c.outUl = ar.w.v;
+            c.filterUsed = ar.filterDura;
+            c.purityBp = (int)Math.Round(ar.purityShown * 100.0);
+            c.cost = ar.cost + AutoSolve.ElectricityPerNight * ar.nights;
+            c.ok = ar.ok;
+            c.nights = ar.nights;
+            c.hydra = HasAutoTool(ar, "portable");
+            c.hydraDur = ar.hydraDura;
+            return c;
+        }
+
+        /// <summary>「更多方案」页的行：全部 ok 解，按出水量从大到小，不按前置/后置过滤。
+        /// 不再剔除“被支配”的解：玩家要看到「少接水、每升更便宜」的另一条，
+        /// 不能只剩一条出水上限方案。</summary>
         private static List<WaterPlan.Combo> AllRows(WaterPlan.Report r, int max)
         {
             var res = new List<WaterPlan.Combo>();
@@ -8904,24 +9614,16 @@ namespace WaterCalcMod
             {
                 var c = r.combos[i];
                 if (c == null || !c.ok) continue;
-                all.Add(c);
-            }
-            // 玩家：花更多、出水更少的方案没必要显示 —— 只留有收益的（被支配的解剔除）
-            var keep = new List<WaterPlan.Combo>();
-            for (int i = 0; i < all.Count; i++)
-            {
-                var c1 = all[i];
-                bool dominated = false;
+                bool dup = false;
                 for (int k = 0; k < all.Count; k++)
                 {
-                    if (k == i) continue;
-                    var c2 = all[k];
-                    if (c2.cost <= c1.cost && c2.outUl >= c1.outUl && (c2.cost < c1.cost || c2.outUl > c1.outUl))
-                    { dominated = true; break; }
+                    var q = all[k];
+                    if (q.feedUl == c.feedUl && q.outUl == c.outUl && q.purityBp == c.purityBp
+                        && q.tablets == c.tablets && Math.Abs(q.cost - c.cost) < 0.01)
+                    { dup = true; break; }
                 }
-                if (!dominated) keep.Add(c1);
+                if (!dup) all.Add(c);
             }
-            all = keep;
             all.Sort(delegate(WaterPlan.Combo a, WaterPlan.Combo b)
             {
                 int k = b.outUl.CompareTo(a.outUl);
@@ -9225,6 +9927,9 @@ namespace WaterCalcMod
         // 玩家 2026-11-14：P2 绿点再点一次＝取消选择。窗口还开着时 AnyMachineVisible() 仍为 true，
         // 主页会继续显示上一台的容器/出水/卖赚。这里单独记「玩家主动取消」，主页据此回到「未选中净水器」。
         private static bool uiDeselected;
+        private static float noBottleSince = -1f;
+        private static string waterGraceSig = "";
+        private static float waterGraceAt = -999f;
         private static readonly Dictionary<PixelWindow, MachineryButton> pickBtns = new Dictionary<PixelWindow, MachineryButton>();
 
         /// <summary>窗口 → Pairs 下标（找不到返回 -1）。</summary>
@@ -9576,6 +10281,14 @@ namespace WaterCalcMod
             var sb = new System.Text.StringBuilder();
             int start = progressActive ? Math.Max(0, progressDoneSteps) : 0;
             if (start >= raw.rawSteps.Count) return PlanText.Lbl("已完成");
+            // 药片可能先于过滤步骤用掉：只扣剩余的，不和 progressDoneSteps 重复扣。
+            int tabletLeft = Math.Max(0, progressTabletUsed - TabletUsedInPrefix());
+            // 补水是方案的准备动作，原来只写在卡片摘要里，步骤行看不到。
+            // 只要当前水还没到方案总量，就把它作为步骤行第一项；
+            // 已经补够（CurrentTopUpUl 返回 0）时自然不写，已经开始执行也仍然提示还差的水。
+            long topUpUl = CurrentTopUpUl(r);
+            if (topUpUl >= 1000L)
+                sb.Append(PlanText.Lbl("补 ")).Append(PlanText.Rich(PlanText.C_NUM, WaterPlan.Ml(topUpUl)));
             for (int i = start; i < raw.rawSteps.Count; i++)
             {
                 var st = raw.rawSteps[i];
@@ -9591,6 +10304,13 @@ namespace WaterCalcMod
                         j++;
                     }
                     i = j - 1;
+                    if (tabletLeft > 0)
+                    {
+                        int cut = Math.Min(count, tabletLeft);
+                        count -= cut;
+                        tabletLeft -= cut;
+                    }
+                    if (count <= 0) continue;
                     if (sb.Length > 0) sb.Append(GAP);
                     sb.Append(PlanText.Lbl("药")).Append(PlanText.Rich(PlanText.C_NUM, count.ToString()));
                 }
@@ -9764,6 +10484,7 @@ namespace WaterCalcMod
             sCalcWater.SetRange(0f, (float)(calcCapUl / 1000.0), 0.1f);
             sCalcWater.SetFillWidth(true);
             sCalcWater.onChanged = new Action<float>(OnCalcWaterSlide);
+            sCalcWater.onReleased = new Action<float>(OnCalcWaterReleased);
             wrow.Add(sCalcWater);
             page.Add(wrow);
             AddCalcSection(page, "净水器模组加成");
@@ -9988,6 +10709,21 @@ namespace WaterCalcMod
             calcWaterUl = ul;
             calcDirty = true;
             RecalcCalc();
+            RefreshCalcLabels();
+        }
+
+        private static void OnCalcWaterReleased(float v)
+        {
+            // 有些机器滑条只在松手时回写最终值；松手后再按最终值强制算一次。
+            long ul = (long)Math.Round(v * 1000.0);
+            if (ul < 0) ul = 0;
+            if (ul > calcCapUl) ul = calcCapUl;
+            if (ul != calcWaterUl)
+            {
+                calcWaterUl = ul;
+                calcDirty = true;
+                RecalcCalc();
+            }
             RefreshCalcLabels();
         }
 
@@ -10257,7 +10993,7 @@ namespace WaterCalcMod
                     {
                         int sg3 = 0, sp3 = 0;
                         try { TodaySource(out sg3, out sp3); } catch (Exception) { sp3 = 0; }
-                        purUse = sp3 > 0 ? sp3 : 9100;
+                        purUse = sp3 > 0 ? sp3 : 0;
                     }
                     long keep = MaxKeepUl((int)(calcCapUl > 0 ? calcCapUl : calcWaterUl),
                                           purUse, calcPerf, calcQuality, calcTargetBp);
@@ -10451,6 +11187,10 @@ namespace WaterCalcMod
                     if (w == null || w.volUl <= 0) continue;
                     // 当前机器里那瓶水在混水页顶部单独显示，下面背包组合不再重复列一遍。
                     if (skipItem != null && ReferenceEquals(w.item, skipItem)) continue;
+                    // 扫描器可能把机器槽里的同一瓶水包成另一个对象；按槽里的 childItem 再排一次，
+                    // 否则顶部「当前机器水 5908.5」和下面「已有 沟渠水 5908.5」会重复（P2）。
+                    // 顶部没读到机器瓶（skipItem==null）时不能排掉：否则这瓶水顶部和下面都不显示。
+                    if (skipItem != null && w.item != null && IsMachineSlotItem(w.item)) continue;
                     scanned++;
                     WaterMath.Water real = null;
                     try { BuildRealWater(w.item, out real); } catch (Exception) { real = null; }
@@ -10997,8 +11737,8 @@ namespace WaterCalcMod
             int ownTab = tools == null ? 0 : tools.tablets;
             if (InfiniteTools) ownTab = -1;
             else if (ownTab < 0) ownTab = 0;
-            int srcBp = tapBp > 0 ? tapBp : 9100;
-            string srcName = SrcName(tapGrade);
+            int srcBp = tapBp > 0 ? tapBp : w0.Purity;
+            string srcName = SrcName(tapKind > 0 ? tapKind : tapGrade);
             bool efficiency = Mode == 1;
 
             // 切档时立即刷新混水页会早于主页重算；这里必须自己把过滤棉预算拉回真实值，
@@ -12619,8 +13359,8 @@ namespace WaterCalcMod
                 // 玩家 2026-11-15：接水会改变容器里六项配比，旧方案是按接水前的水样出的，
                 // 接完再拿旧方案继续走会和实际混水冲突。只有这次接水真的改变六项时，
                 // 接完改成“只按实际这瓶水算”：不再继续搜还能再接多少，也不会按一次又让接第二段。
-                // 空瓶 / 瓶里本来就是今天水管水（含玩家手动加过但六项仍与今日水源一致）时不改变六项，
-                // 仍按原方案锁住，正常走之前的模式。
+                // 空瓶 / 瓶里本来就是今天水管水（含玩家手动加过但六项仍与今日水源一致）时六项没变；
+                // 但空瓶接水后不能锁接水前的旧方案，下面单独解锁按实际水量重算。
                 // 玩家 2026-11-15：先清空成 0 容量做假设计算、随后真的把水倒进机器，
                 // 计算页不能再停在“手填/清空”的旧状态；物理接水以机器瓶为唯一真值。
                 // 只清计算页的假设锁，不动读取样瓶（calcManualSource 下面单独处理）。
@@ -12630,6 +13370,7 @@ namespace WaterCalcMod
                     calcClearPick = null;
                 }
                 bool fillChangesParts = !preEmpty && !preSameTap;
+                bool fillFull = filledUl >= WaterHelper.GetTotalCapacity(dest) - 1500L;
                 bool fixActual = fillChangesParts && (!calcManual || calcManualSource);
                 // 读取的样水已经实际倒进目标容器：切回目标容器，让容器/方案跟着实际水量。
                 if (calcManualSource)
@@ -12641,6 +13382,22 @@ namespace WaterCalcMod
                 }
                 if (fillChangesParts)
                     UnlockPlan("接水后六项变了，按实际混合水重算");
+                // 空瓶接水后不要锁接水前的旧方案：旧方案可能还停在空瓶/上一只瓶的水量，
+                // 锁上去会让第一次显示 8.95 不补水方案，必须切模式才刷新。
+                // 但如果接水前那份方案本来就是按“这个空瓶接满”算的，
+                // 接满后就沿用它，避免接水前 3 药、接水后突然变 5 药。
+                if (preEmpty && !fillChangesParts)
+                {
+                    long planTargetUl = (rFillPlan != null && rFillPlan.water0 != null)
+                        ? rFillPlan.water0.v : 0L;
+                    if (fillFull && planTargetUl > 0L && Math.Abs(planTargetUl - filledUl) <= 1500L)
+                    {
+                        LockPlan(rFillPlan, "空瓶接水后沿用接水前方案");
+                        postFillFix = false;
+                        postFillSig = "";
+                    }
+                    else UnlockPlan("空瓶接水后按实际水重算");
+                }
                 try
                 {
                     if (!calcManual)
@@ -12648,17 +13405,20 @@ namespace WaterCalcMod
                 }
                 catch (Exception) { }
                 InvalidateCalc();
-                if (fixActual)
+                if (fixActual && fillFull)
                 {
+                    // 只有真的补到容量附近才启用“只按实际这瓶水算”；
+                    // 5909/6000 这种还没满的，继续允许性价比找补到 6000 的方案。
                     postFillFix = true;
                     postFillSig = LockVolSig();
                 }
                 else if (!calcManualSource)
                 {
-                    // 六项没变，原方案仍然成立；锁在刷新之后落，避免计算页指纹变化把锁判失效。
                     postFillFix = false;
                     postFillSig = "";
-                    LockPlan(rFillPlan, "接水后锁定");
+                    // 六项没变且不是空瓶接水，原方案仍然成立；锁在刷新之后落，避免计算页指纹变化把锁判失效。
+                    if (!preEmpty && !fillChangesParts)
+                        LockPlan(rFillPlan, "接水后锁定");
                 }
                 Rebuild(true);
                 return "ok container=" + name + " vol=" + showMl + " pur=" + readPur;
