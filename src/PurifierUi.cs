@@ -426,6 +426,13 @@ namespace WaterCalcMod
             activeIdx = idx;
             MachineOverride = idx;
             uiDeselected = false;
+            // 与 SelectPair 换机器时同一套清理：右键读取的旧瓶/旧手动源不能跟到新机器。
+            lastPickedBottle = null;
+            calcClearPick = null;
+            RightClickTarget = null;
+            calcManualSource = false;
+            calcReadSource = false;
+            lastVisible = null;
             try { PurifierHook.PickedIndex = idx; } catch (Exception) { }
             // 用游戏自己的窗口激活接口：点另一台的按钮/窗口后，它才是当前激活窗口。
             try
@@ -572,7 +579,10 @@ namespace WaterCalcMod
                                 return;
                             }
                             if (activeIdx == pi && MachineOverride == pi) DeselectPair();
-                            else SelectPair(pi);
+                            // 玩家 2026-11-17：绿点必须和“直接点机器面板”走同一个入口。
+                            // SelectPair 会先把 activeIdx 设成目标，导致 UseWindow→AdoptPairForWindow 看到
+                            // “已经是这台”直接返回，跳过读水/解锁计划，表现成有概率锁旧方案。
+                            else AdoptPairForWindow(pi);
                         }
                         catch (Exception e)
                         {
