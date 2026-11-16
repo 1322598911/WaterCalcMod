@@ -561,12 +561,23 @@ namespace WaterCalcMod
                 MachineryButton pickBtn = NewIcon(PixelIcons.Get("pick", out iw, out ih),
                     "选中这台（绿=当前按它算）", new Action(delegate
                     {
-                        int pi = PairIndexOf(w);
-                        // 玩家 2026-11-13（第七轮）：绿点再点一次要能取消选中；
-                        // 但不能像以前那样「取消后下一 tick 又被自动选回去」。
-                        if (pi < 0) return;
-                        if (activeIdx == pi && MachineOverride == pi) DeselectPair();
-                        else SelectPair(pi);
+                        // 原生 MachineryButton.OnSelect：回调抛异常就不会 Deselect，按钮会永久卡在按下态，
+                        // 之后点击全不触发。这里必须吞掉所有异常并让回调正常返回。
+                        try
+                        {
+                            int pi = PairIndexOf(w);
+                            if (pi < 0)
+                            {
+                                if (log != null) log.LogWarning("[ui] 绿点找不到配对 win=" + (w == null ? "null" : "ok") + " pairs=" + PurifierHook.Pairs.Count);
+                                return;
+                            }
+                            if (activeIdx == pi && MachineOverride == pi) DeselectPair();
+                            else SelectPair(pi);
+                        }
+                        catch (Exception e)
+                        {
+                            try { if (log != null) log.LogWarning("[ui] 绿点点击异常 " + e.GetType().Name + " " + e.Message); } catch (Exception) { }
+                        }
                     }));
                 if (pickBtn != null)
                 {
