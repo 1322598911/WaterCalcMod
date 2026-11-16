@@ -2296,9 +2296,17 @@ namespace WaterCalcMod
         /// 会留下一整套旧方案（玩家 2026-11-16 报：3000 方案换 6 L 容器不刷新，切模式才变）。</summary>
         private static GameItem PlanBottle()
         {
-            // 机器窗口开着时只看选中那台的槽：槽空/没容器就返回 null，
-            // 不能拿背包或另一台机器的瓶继续撑住旧方案。
-            if (MachineOpen()) return ActiveMachineBottle();
+            // 机器窗口开着时优先看玩家点选的那台；机器停着也照样读，不因为开关机状态换瓶。
+            if (MachineOpen())
+            {
+                var selected = SelectedMachineBottle();
+                if (selected != null) return selected;
+                return ActiveMachineBottle();
+            }
+            // 窗口开着、但全局 MachineWindow 还没同步到这台时，仍然按 activeIdx 读选中槽。
+            // 旧版这里会掉到 GameBottle/CtxBottle，混水页立刻拿到背包里的另一瓶。
+            var selectedB = SelectedMachineBottle();
+            if (selectedB != null) return selectedB;
             var b = GameBottle();
             if (b != null) return b;
             b = CtxBottle();
@@ -5655,7 +5663,12 @@ namespace WaterCalcMod
                         // 混水页要能读到「净水器槽里已有液体」，不能只认点了绿点的配对：
                         // 机器窗口开着但还没点选时，PlanBottle() 会返回 null，
                         // 于是顶部没有当前机器水、下面扫描又按机器槽排掉，整瓶水就“消失”了。
-                        if (MachineOpen())
+                        // 玩家 2026-11-17：已点选时只读 activeIdx 对应那台，不能因为全局
+                        // MachineWindow 还没同步，就掉到 AnyVisibleMachineBottle 的另一台。
+                        var selPair = SelectedPairForRead();
+                        if (selPair != null)
+                            machineB = ActiveSlotBottle(selPair.BottleInv);
+                        else if (MachineOpen())
                         {
                             machineB = PlanBottle();
                             if (machineB == null && !uiDeselected)
@@ -9322,6 +9335,23 @@ namespace WaterCalcMod
             return na == nb && ca == cb;
         }
 
+        /// <summary>混水页排重：同一瓶水即使被扫描器重新包了一层，也要认成同一个。
+        /// 只比较名称+容量+水量+纯度；不比较对象引用，避免 5553.1 被另一台 5541.5 的同名瓶误删。</summary>
+        private static bool SameBottleForSkip(GameItem a, GameItem b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+            try
+            {
+                if (GameBridge.NameOfItem(a) != GameBridge.NameOfItem(b)) return false;
+                if (WaterHelper.GetTotalCapacity(a) != WaterHelper.GetTotalCapacity(b)) return false;
+                if (WaterHelper.GetTotalVolume(a) != WaterHelper.GetTotalVolume(b)) return false;
+                if (WaterHelper.GetWaterPurity(a) != WaterHelper.GetWaterPurity(b)) return false;
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
         /// <summary>当前选中的机器配对：优先 activeIdx，但 activeIdx 可能指向已关闭的旧窗口；
         /// 旧窗口的 BottleInv 会保留旧容器，导致空槽仍读出旧瓶（P5）。</summary>
         private static PurifierHook.Pair ActivePair()
@@ -9364,6 +9394,27 @@ namespace WaterCalcMod
                 return cap > 0 ? item : null;
             }
             catch (Exception) { return null; }
+        }
+
+        /// <summary>玩家明确选中的那台配对，只按 activeIdx/MachineOverride 认，不看机器是否开机。
+        /// 混水页/主页要读“选中的那台”，不能因为机器停着就掉到第一台可见机器（玩家 2026-11-17 截图：
+        /// 选中机器里有 5553.1，混水页却读成另一台的 5541.5）。</summary>
+        private static PurifierHook.Pair SelectedPairForRead()
+        {
+            if (uiDeselected) return null;
+            int idx = activeIdx >= 0 ? activeIdx : MachineOverride;
+            if (idx < 0 || idx >= PurifierHook.Pairs.Count) return null;
+            var p = PurifierHook.Pairs[idx];
+            if (p == null || p.Window == null || p.BottleInv == null) return null;
+            if (!PurifierHook.WindowVisible(p.Window)) return null;
+            return p;
+        }
+
+        /// <summary>选中的机器槽里那瓶水；选中槽为空就返回 null，不跨机器兜底。</summary>
+        private static GameItem SelectedMachineBottle()
+        {
+            var p = SelectedPairForRead();
+            return p == null ? null : ActiveSlotBottle(p.BottleInv);
         }
 
         /// <summary>当前选中机器槽里的真实容器；不跨机器兜底。空槽返回 null。</summary>
@@ -11190,10 +11241,10 @@ namespace WaterCalcMod
                     if (w == null || w.volUl <= 0) continue;
                     // 当前机器里那瓶水在混水页顶部单独显示，下面背包组合不再重复列一遍。
                     if (skipItem != null && ReferenceEquals(w.item, skipItem)) continue;
-                    // 扫描器可能把机器槽里的同一瓶水包成另一个对象；按槽里的 childItem 再排一次，
-                    // 否则顶部「当前机器水 5908.5」和下面「已有 沟渠水 5908.5」会重复（P2）。
-                    // 顶部没读到机器瓶（skipItem==null）时不能排掉：否则这瓶水顶部和下面都不显示。
-                    if (skipItem != null && w.item != null && IsMachineSlotItem(w.item)) continue;
+                    // 扫描器可能把机器槽里的同一瓶水包成另一个对象；只按“同一瓶水”的四项特征排重，
+                    // 不能像旧版那样把所有机器槽里的水都排掉。玩家 2026-11-17 选中机器 5553.1，
+                    // 混水页顶部却读成另一台 5541.5，并且 5553.1 在列表里消失，就是 blanket 排重造成的。
+                    if (skipItem != null && w.item != null && SameBottleForSkip(w.item, skipItem)) continue;
                     scanned++;
                     WaterMath.Water real = null;
                     try { BuildRealWater(w.item, out real); } catch (Exception) { real = null; }
