@@ -435,11 +435,28 @@ namespace WaterCalcMod
             }
             catch (Exception) { }
             UnlockPlan("换机器");
+            ReadSelectedMachineForPlan();
             DropPlanCache();
             RefreshPickTints();
             RefreshMixIfOpen();
             RequestRebuild();
             Log("[ui] adopt pair=" + idx + " (window switch)");
+        }
+
+        /// <summary>复用右键读取的判定，只读选中机器槽里的实际水并刷新主页/方案，不跳计算页。</summary>
+        private static void ReadSelectedMachineForPlan()
+        {
+            try
+            {
+                if (uiDeselected) return;
+                var b = SelectedMachineBottle();
+                if (b == null) return;
+                ReadBottleToCalc(b, false);
+            }
+            catch (Exception e)
+            {
+                Log("[ui] 选中机器后读取水样失败 " + e.GetType().Name + " " + e.Message);
+            }
         }
 
         /// <summary>上下文窗口里的瓶；没有就 null。</summary>
@@ -10096,6 +10113,8 @@ namespace WaterCalcMod
             if (pw != null) { try { pw.ToFront(); } catch (Exception) { } }
             DropPlanCache();
             if (pw != null) UseWindow(pw);
+            // 已经是这台时 UseWindow 不会走 Adopt 分支，但玩家重新点选仍要按当前机器水读一次。
+            if (idx == oldActive) ReadSelectedMachineForPlan();
             RefreshPickTints();
             try { if (UiPage == 4) LoadCalcFromContext(true); } catch (Exception) { }
             RequestRebuild();
@@ -13010,6 +13029,13 @@ namespace WaterCalcMod
         /// </summary>
         public static string ReadBottleToCalc(object item)
         {
+            return ReadBottleToCalc(item, true);
+        }
+
+        /// <summary>读取这瓶水并刷新上下文；openCalcPage=false 时只回主页，不跳到计算页。
+        /// 玩家 2026-11-17：切机器时复用右键读取的判定，直接拿选中机器槽里的实际水做样瓶。</summary>
+        private static string ReadBottleToCalc(object item, bool openCalcPage)
+        {
             GameItem b = item as GameItem;
             if (b == null) return "读取水质：不是水瓶";
             long v = 0, cap = 0;
@@ -13046,8 +13072,15 @@ namespace WaterCalcMod
             DropPlanCache();
             RememberSettings();
             string opened = ShowMain(true);
-            SetPage(4);
-            LastMsg = "已读取 " + v + " μL 六项水质";
+            if (openCalcPage)
+            {
+                SetPage(4);
+                LastMsg = "已读取 " + v + " μL 六项水质";
+            }
+            else
+            {
+                LastMsg = "已读取当前机器 " + v + " μL 水质";
+            }
             Log("[calc] 右键读取水质 vol=" + v + " cap=" + cap + " pur=" + pur
                 + " item=" + GameBridge.NameOfItem(b) + " show=" + opened
                 + " loaded=" + calcLoadedVol + "/" + calcLoadedCap
