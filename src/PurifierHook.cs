@@ -328,8 +328,32 @@ namespace WaterCalcMod
             return sb.ToString();
         }
 
+        /// <summary>当前真正被游戏激活（focusStamp 最新）且可见的机器窗口。
+        /// 不要用悬停 tooltip 的 MachineWindow：它会被鼠标移到别的机器时改写，导致读数和方案串台。</summary>
+        public static Pair FocusedVisiblePair()
+        {
+            int idx = FocusedVisibleIndex();
+            return idx >= 0 && idx < Pairs.Count ? Pairs[idx] : null;
+        }
+
+        public static int FocusedVisibleIndex()
+        {
+            int best = -1;
+            long bestStamp = -1L;
+            for (int i = 0; i < Pairs.Count; i++)
+            {
+                var p = Pairs[i];
+                if (p == null || p.Window == null || !WindowVisible(p.Window)) continue;
+                var pw = p.Window as PixelWindow;
+                if (pw == null) continue;
+                long stamp = pw.focusStamp;
+                if (stamp > bestStamp) { bestStamp = stamp; best = i; }
+            }
+            return best;
+        }
+
         /// <summary>按「哪个窗口正显示着」来确定玩家打开的净水器（PixelWindow.IsVisible）。
-        /// 玩家点选过哪台就优先用那台（PickedIndex），没点过才退回第一台可见窗口。</summary>
+        /// 玩家点选过哪台就优先用那台（PickedIndex），没点过才退回实际被激活的窗口。</summary>
         public static void SyncFromVisible()
         {
             if (Pairs.Count == 0) return;
@@ -343,6 +367,14 @@ namespace WaterCalcMod
                     ApplyPair(pp, PickedIndex);
                     return;
                 }
+            }
+
+            // 没点选过：按游戏实际激活的窗口（focusStamp 最新）算，不能拿「最后打开的那台」或悬停缓存。
+            var focused = FocusedVisiblePair();
+            if (focused != null)
+            {
+                ApplyPair(focused, Pairs.IndexOf(focused));
+                return;
             }
 
             for (int i = Pairs.Count - 1; i >= 0; i--)

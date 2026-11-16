@@ -427,6 +427,13 @@ namespace WaterCalcMod
             MachineOverride = idx;
             uiDeselected = false;
             try { PurifierHook.PickedIndex = idx; } catch (Exception) { }
+            // 用游戏自己的窗口激活接口：点另一台的按钮/窗口后，它才是当前激活窗口。
+            try
+            {
+                var pw = PurifierHook.Pairs[idx].Window as PixelWindow;
+                if (pw != null) pw.ToFront();
+            }
+            catch (Exception) { }
             UnlockPlan("换机器");
             DropPlanCache();
             RefreshPickTints();
@@ -9407,8 +9414,10 @@ namespace WaterCalcMod
                 if (selected != null && selected.Window != null && PurifierHook.WindowVisible(selected.Window))
                     return selected;
             }
-            // 没选中（或选中的旧窗口已关）时，才按当前全局窗口从「最新配对」往前找：
-            // 窗口关掉再开时 Pairs 会留下旧配对，旧配对的 BottleInv 仍挂着旧容器（P5）。
+            // 没选中（或选中的旧窗口已关）时，先按游戏真正激活的窗口（focusStamp 最新）。
+            var focused = PurifierHook.FocusedVisiblePair();
+            if (focused != null) return focused;
+            // 最后才回退到 MachineWindow 缓存。
             PurifierHook.Pair sameWindow = null;
             for (int i = pairs.Count - 1; i >= 0; i--)
             {
@@ -10082,8 +10091,10 @@ namespace WaterCalcMod
             // 让 PurifierHook 那边也认这个点选，否则它每帧按「第一台可见窗口」把上下文改回去，
             // 表现成：选了 20 L 那台，接水量还是 750 那台锁着，只有关掉 750 窗口才正常。
             PurifierHook.PickedIndex = idx;
-            DropPlanCache();
             var pw = PurifierHook.Pairs[idx].Window as PixelWindow;
+            // 用游戏自己的窗口激活接口：选台即把这台机器窗口置前，后续读数只认真正激活的窗口。
+            if (pw != null) { try { pw.ToFront(); } catch (Exception) { } }
+            DropPlanCache();
             if (pw != null) UseWindow(pw);
             RefreshPickTints();
             try { if (UiPage == 4) LoadCalcFromContext(true); } catch (Exception) { }
@@ -10096,6 +10107,8 @@ namespace WaterCalcMod
         // ---------------- 红框（机器高亮）与圆点着色：节流刷新 ----------------
         private static float lastVisPoll = -999f;
         private static string lastVisSig = "";
+        // 游戏窗口 focusStamp 的上一轮激活配对；只跟随「玩家后来点了另一台已有窗口」，不跟首次打开。
+        private static int lastFocusPairIdx = -2;
         private static float lastTintT = -999f;
         private static float lastMarkerNote = -999f;
         private static float lastTickIn = -999f;
@@ -10135,6 +10148,18 @@ namespace WaterCalcMod
             string vs = VisibleSig();
             bool changed = vs != lastVisSig;
             lastVisSig = vs;
+            // 玩家 2026-11-17：读取游戏自己的窗口激活状态（PixelWindow.focusStamp）。
+            // 只跟随“已有窗口被玩家点成前台”：窗口首次打开仍不自动选台，保持 P2 的旧规则。
+            int focusIdx = -1;
+            try { focusIdx = PurifierHook.FocusedVisibleIndex(); } catch (Exception) { }
+            bool focusChanged = focusIdx != lastFocusPairIdx;
+            lastFocusPairIdx = focusIdx;
+            if (!changed && focusChanged && !uiDeselected && activeIdx >= 0
+                && focusIdx >= 0 && focusIdx != activeIdx)
+            {
+                AdoptPairForWindow(focusIdx);
+                return;
+            }
             // 玩家 2026-11-16：窗口刚打开也不再自动选台；必须玩家点绿点。
             // 旧逻辑会让 p2「没选机器」仍按这台机器出 2 药方案。
             try
