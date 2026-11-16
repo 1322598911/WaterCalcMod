@@ -39,12 +39,16 @@ namespace WaterCalcMod
         public static double HydraPrice = 225.0;
         public static int HydraDuraMax = 400;
         public static double ElectricityPerNight = 0.0;
+        /// <summary>时间效率成本（元/晚）。0 晚方案没有这一项；用来避免为了省耗材硬拖净化器过夜。</summary>
+        public static double TimeValuePerNight = 0.0;
         public static long LastSearchMs = 0;
         // -1 = 自动，不限制；0 = 不放药片；N = 总片数必须正好 N
         public static int TabletTarget = -1;
         /// <summary>药片影子价（元/片）：自动档用来衡量“这片药留着以后用”的价值。
         /// 0 = 不启用；只在 TabletTarget = -1 且性价比自动档时由界面写入。</summary>
         public static double TabletShadow = 0.0;
+        /// <summary>设置页“不用机器”时由界面置 false：净化器/过夜节点不参与搜索。</summary>
+        public static bool AllowMachine = true;
 
         /// <summary>批次 28 的界面口径：海德拉 325/300、电 1.5/晚。对照脚本不要调用。</summary>
         public static void UseUiCost()
@@ -52,6 +56,9 @@ namespace WaterCalcMod
             HydraPrice = 325.0;
             HydraDuraMax = 300;
             ElectricityPerNight = 1.5;
+            // 玩家 2026-11-16：0 晚也是方案；不能让“少用一片药/一次过滤”的过夜方案
+            // 只按电费 1.5 元算。这里把一晚的时间效率成本算进去（电费 1.5 + 时间 8.5 = 10 元/晚）。
+            TimeValuePerNight = 8.5;
         }
 
         private const double WaterPriceL = 40.0;
@@ -309,7 +316,7 @@ namespace WaterCalcMod
         private static double Net(Result r)
         {
             if (r == null) return double.MinValue;
-            return r.revenue - r.cost - ElectricityPerNight * r.nights;
+            return r.revenue - r.cost - (ElectricityPerNight + TimeValuePerNight) * r.nights;
         }
 
         /// <summary>净赚 − 药片影子价；只用于同一进水量下的药片档比较。</summary>
@@ -324,6 +331,18 @@ namespace WaterCalcMod
             if (a == null) return false;
             if (b == null) return true;
             double sa = ShadowScore(a), sb = ShadowScore(b);
+            if (sa != sb) return sa > sb;
+            if (a.w.v != b.w.v) return a.w.v > b.w.v;
+            if (a.nights != b.nights) return a.nights < b.nights;
+            return a.tablets < b.tablets;
+        }
+
+        /// <summary>最终选择：同样按 Net（含电费+时间效率成本）比较，0 晚候选也参与。</summary>
+        private static bool BetterFinal(Result a, Result b)
+        {
+            if (a == null || !a.ok) return false;
+            if (b == null || !b.ok) return true;
+            double sa = Net(a), sb = Net(b);
             if (sa != sb) return sa > sb;
             if (a.w.v != b.w.v) return a.w.v > b.w.v;
             if (a.nights != b.nights) return a.nights < b.nights;
@@ -389,6 +408,7 @@ namespace WaterCalcMod
                 if (t == "filter" && !allowFilter) continue;
                 if (t == "portable" && !allowHydra) continue;
                 if (t == "tablet" && !allowTablet) continue;
+                if (t == "purifier" && !AllowMachine) continue;
                 tools.Add(t);
             }
             if (tools.Count == 0) return null;
@@ -401,6 +421,9 @@ namespace WaterCalcMod
             Node hit = null;
             Node display = null;
             Node zeroNode = null;
+            // 玩家 2026-11-16：0 晚（不过净化器）本身也是候选；
+            // 旧搜索按“第一个达标路径”停在 1 晚净化器，2 步的 0 晚药片+滤棉永远轮不到。
+            var zeroNightCands = new List<Node>();
             // 玩家 2026-11-15：目标已经由 0 片方案达标时，旧搜索会在 hit 后提前停，
             // 导致主页永远看不到「同进水量、同晚数、加片更赚」的候选；这里单独收集药片档，
             // 只在性价比自动档（TabletShadow>0、库存有限、TabletTarget=-1）参与影子价比较。
@@ -440,6 +463,10 @@ namespace WaterCalcMod
                     if (c.tablets == 0 && c.w.Purity >= targetBp
                         && (zeroNode == null || Better(c, zeroNode, capPct, pureMode)))
                         zeroNode = c;
+                    // 0 晚候选不要求 0 药片：药片+滤棉也可能是不用过夜的正确解。
+                    if (c.nights == 0 && c.w.Purity >= targetBp && TabletCountOk(c)
+                        && zeroNightCands.Count < 200)
+                        zeroNightCands.Add(c);
                     if (TabletShadow > 0 && TabletTarget < 0 && c.tablets > 0
                         && c.w.Purity >= targetBp && TabletCountOk(c)
                         && shadowCands.Count < 200)
@@ -533,6 +560,13 @@ namespace WaterCalcMod
                     }
                     if (bestT != null) result = bestT;
                 }
+            }
+            // 0 晚候选按同一套 Net（含时间效率成本）重新比一次；不能因为净化器路径短就默认选它。
+            for (int i = 0; i < zeroNightCands.Count; i++)
+            {
+                var z = BuildResult(zeroNightCands[i], targetBp);
+                z.feedUl = result.feedUl;
+                if (z.ok && BetterFinal(z, result)) result = z;
             }
             return result;
         }
@@ -714,8 +748,8 @@ namespace WaterCalcMod
                 if (a.nights != b.nights) return a.nights < b.nights;
                 return a.cost < b.cost;
             }
-            double pa = a.revenue - a.cost - ElectricityPerNight * a.nights;
-            double pb = b.revenue - b.cost - ElectricityPerNight * b.nights;
+            double pa = a.revenue - a.cost - (ElectricityPerNight + TimeValuePerNight) * a.nights;
+            double pb = b.revenue - b.cost - (ElectricityPerNight + TimeValuePerNight) * b.nights;
             if (pa != pb) return pa > pb;
             if (a.w.v != b.w.v) return a.w.v > b.w.v;
             return a.nights < b.nights;

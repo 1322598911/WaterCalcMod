@@ -3,8 +3,8 @@
   <ID>watercalc_assistant</ID>
   <Name>净水助手</Name>
   <Author>qixian</Author>
-  <ModVersion>1.0.2</ModVersion>
-  <Description>净水计算助手：药片按库存影子价选0/加片，主页/混水统一，一晚优先、两晚兜底，成本按实际晚数计</Description>
+  <ModVersion>1.0</ModVersion>
+  <Description>净水助手：在游戏原生净水器面板里直接计算接水量、过滤/药片/混水/净化步骤、晚数、出水纯度、成本与净赚。药片按实际片数推进，关机器或容器挪走后不会保留旧方案。</Description>
   <GameVersions>
     <Version>0.46</Version>
   </GameVersions>
