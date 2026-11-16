@@ -1488,6 +1488,9 @@ namespace WaterCalcMod
         // 往瓶里倒水、接水、过夜让水质变了，都不能自己换一套 —— 「接水」键只灌水，不重算。
         private static WaterPlan.Report lockedReport;
         private static bool lockedFull;
+        // 方案锁在哪台机器：换机器必须无条件解锁定，不能先让水量/进度分支把旧方案留住。
+        // 玩家 2026-11-17：换机器有时刷新、有时不刷新，根因就是旧方案执行中的分支把旧步骤保下来了。
+        private static int lockedPairIdx = -1;
         private static string lockModeSig = "";
         private static string lockBottleSig = "";
         private static float lockedAt = -999f;
@@ -1582,6 +1585,7 @@ namespace WaterCalcMod
             {
                 lockedReport = compareOld;
                 lockedFull = true;
+                lockedPairIdx = activeIdx >= 0 ? activeIdx : MachineOverride;
                 lockModeSig = LockModeSig();
                 lockBottleSig = LockVolSig();
                 lockPostFillFix = postFillFix;
@@ -1613,6 +1617,7 @@ namespace WaterCalcMod
             }
             lockedReport = r;
             lockedFull = full;
+            lockedPairIdx = activeIdx >= 0 ? activeIdx : MachineOverride;
             waterGraceSig = "";
             waterGraceAt = -999f;
             lockModeSig = LockModeSig();
@@ -1742,6 +1747,7 @@ namespace WaterCalcMod
                 return;
             }
             lockedReport = null;
+            lockedPairIdx = -1;
             lockModeSig = "";
             lockBottleSig = "";
             progressLastVolUl = 0L;
@@ -1887,6 +1893,14 @@ namespace WaterCalcMod
             if (uiDeselected)
             {
                 UnlockPlan("取消选择机器");
+                return false;
+            }
+            // 玩家 2026-11-17：换机器必须无条件重算。旧方案执行中时，下面的水量/纯度分支
+            // 可能直接 return true 把旧步骤留下；先在机器身份这一层判死，避免“有时刷新有时不刷新”。
+            int curPair = activeIdx >= 0 ? activeIdx : MachineOverride;
+            if (lockedPairIdx != curPair)
+            {
+                UnlockPlan("换机器 " + lockedPairIdx + "->" + curPair);
                 return false;
             }
             if (lockedReport != null && MachineOpen() && ActiveMachineBottle() == null)
