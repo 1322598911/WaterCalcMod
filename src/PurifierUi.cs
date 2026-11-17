@@ -209,9 +209,6 @@ namespace WaterCalcMod
         private static string planKey = "";
         // 「接水」键这次实际会倒进去的整瓶量（mL）：OnFill 用的就是这条整瓶拆分
         private static long planPourMl = 0;
-        // 主页「需接水」后面的理论量：不受当前容器容量限制的一晚机器上限，按输入缓存。
-        private static string theoryKey = "";
-        private static long theoryUl = 0;
         private static Sprite iCalc, iFill, iCfg, iGear;
         // 加载 mod 时的默认：平衡模式开（按瓶里真实水质算）。
         // 玩家要求「再游戏加载模组的时候设置」，所以这里给初值，设置窗里可改。
@@ -9637,22 +9634,6 @@ namespace WaterCalcMod
             return add >= 1000L ? add : 0L;
         }
 
-        /// <summary>
-        /// 主页「需接水」后的理论量：把容量放到 50 L（游戏最大容器档）再跑同一套 MaxKeepUl，
-        /// 得到“机器一晚理论上能接多少”，不受当前 6 L/3 L 瓶限制。按输入缓存，避免每帧重算。
-        /// </summary>
-        private static long TheoryKeepUl(PanelModel m)
-        {
-            if (m == null || m.PurityBp <= 0) return 0;
-            int target = m.TargetBp > 0 ? m.TargetBp : PlanText.TargetBp(TargetIdx, m.Quality);
-            string key = m.PurityBp + "|" + m.PerfPct + "|" + m.Quality + "|" + target + "|" + WaterPlan.MaxTablets;
-            if (key == theoryKey) return theoryUl;
-            long v = MaxKeepUl(50000000, m.PurityBp, m.PerfPct, m.Quality, target);
-            theoryKey = key;
-            theoryUl = v;
-            return v;
-        }
-
         private static string CardFeedValueFor(PanelModel m, WaterPlan.Report r)
         {
             // 玩家 2026-11-12 定案：主界面只留一句核心状态，三种写法，其余解释一律删掉：
@@ -9718,10 +9699,13 @@ namespace WaterCalcMod
             if (want <= 0) want = pour;
             if (!UncapEff && want > room) want = room;
             string feed = PlanText.Lbl("需接水 ") + PlanText.Num(WaterPlan.Ml(want * 1000L));
-            // 玩家 2026-11-17：需接水后面要能看到“理论能接多少”，否则 6 L 瓶只报 750 会以为模型坏了。
-            long theory = TheoryKeepUl(m);
-            if (theory > want * 1000L)
-                feed += PlanText.Lbl("  理论 ") + PlanText.Num(WaterPlan.Ml(theory));
+            // 玩家 2026-11-17 纠正：这里不是“机器理论上限”，而是选中方案本身要接的水量。
+            // 方案按容器精度取整后，planPourMl 会被 50 mL/6 L 这类瓶子卡成 800；
+            // 把未取整的 ChosenFeedUl 也显示出来，且不允许超过当前容器容量。
+            long planFeed = r != null ? r.ChosenFeedUl() : 0;
+            long cap = m.CapacityMl > 0 ? m.CapacityMl * 1000L : (r != null ? r.capUl : 0);
+            if (planFeed > want * 1000L && planFeed > 0 && (cap <= 0 || planFeed <= cap))
+                feed += PlanText.Lbl("  方案 ") + PlanText.Num(WaterPlan.Ml(planFeed));
             return feed;
         }
 
