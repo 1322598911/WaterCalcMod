@@ -7958,7 +7958,7 @@ namespace WaterCalcMod
                 {
                     string capText = m.VolumeMl + "/" + m.CapacityMl + " mL";
                     if (m.TheoreticalCapacityMl > m.CapacityMl)
-                        capText += "  理论 " + m.TheoreticalCapacityMl + " mL";
+                        capText += "  理论最高 " + m.TheoreticalCapacityMl + " mL";
                     SetT(pSub, PlanText.Rich(PlanText.C_NUM, capText));
                 }
                 // 玩家 2026-11-13：不管瓶里有没有水，这一行都叫「水源」（他要把「今日水」统一成「水源」）——
