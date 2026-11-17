@@ -2582,11 +2582,23 @@ namespace WaterCalcMod
             int tapFeedGrade = 0, tapFeedPur = 0;
             try { TapSource(out tapFeedGrade, out tapFeedPur); } catch (Exception) { tapFeedPur = 0; }
             // 空瓶没有「瓶里现成水」，补水纯度就必须等于界面显示的水源纯度。
+            // 玩家 2026-11-18：倒空后 GetWaterPurity(空瓶) 恒为 0，不能把 0 当成水源；
+            // 以顶部已经算好的自动水源纯度为准，其次才用本次 TapSource。
+            int shownSrcBp = Model != null ? Model.SourcePurBp : 0;
+            if (volUl <= 0L)
+            {
+                if (tapPur <= 0 && shownSrcBp > 0) tapPur = shownSrcBp;
+                if (tapFeedPur <= 0) tapFeedPur = tapPur;
+            }
             if (volUl <= 0L && tapPur > 0) tapFeedPur = tapPur;
             // 非空瓶绝不拿瓶内水纯度当水龙头补水：否则会出现「98.20% 补 3750 还是 98.20%」。
             // 水龙头读不到就不补，保留现有水样。
             int purityBp = CustomPur > 0 ? CustomPur : WaterHelper.GetWaterPurity(b);
-            if (volUl <= 0 && CustomPur <= 0 && tapPur > 0 && !calcManualSource) purityBp = tapPur;
+            if (volUl <= 0 && CustomPur <= 0 && !calcManualSource)
+            {
+                if (tapPur > 0) purityBp = tapPur;
+                else if (shownSrcBp > 0) purityBp = shownSrcBp;
+            }
             string srcName = calcManualSource ? "手填" : (CustomPur > 0 ? "手填" : SrcName(srcGrade));
             WaterMath.Water realW = null;
             bool hasReal = false;
