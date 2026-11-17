@@ -2459,7 +2459,15 @@ namespace WaterCalcMod
             }
             catch (Exception) { }
 #endif
-            if (b == null || !MachineOpen()) { autoHydraHint = false; return null; }
+            if (b == null || !MachineOpen())
+            {
+                autoHydraHint = false;
+                // 玩家 2026-11-17：自动读不到选中机器槽里的容器时，不要再按旧水/另一台水出方案；
+                // 给一句明确提示，让玩家点绿点选机器或右键读取。
+                if (b == null && MachineOpen())
+                    LastMsg = "没读到这台机器的容器，请点绿点选机器或右键读取";
+                return null;
+            }
             int perf, q;
             Bonuses(out perf, out q);
             int targetBp = PlanText.TargetBp(TargetIdx, q);
@@ -2484,10 +2492,10 @@ namespace WaterCalcMod
             if (volUl <= 0L && Model != null && Model.SourcePurBp > 0)
             {
                 tapPur = Model.SourcePurBp;
-                srcGrade = Model.Grade;
-                if (srcGrade != 4 && srcGrade != 5)
-                    srcGrade = TapPurLooksValid(5, tapPur) ? 5
-                             : (TapPurLooksValid(4, tapPur) ? 4 : 0);
+                // 玩家 2026-11-17：只认当前读到的纯度，不能沿用 Model 里上一次的水源档位。
+                // 以前这里保留 srcGrade=4/5，读到沟渠 86.54 时仍按铁锈档算，自动就变成「铁锈未解锁」。
+                srcGrade = TapPurLooksValid(5, tapPur) ? 5
+                         : (TapPurLooksValid(4, tapPur) ? 4 : 0);
             }
             // 补进容器的水来自水龙头，不能拿瓶里现成水的纯度去补。
             // 手动源（右键读取）尤其明显：2 L 幽灵水 + 48 L 铁锈水会混成另一种水。
@@ -3354,6 +3362,45 @@ namespace WaterCalcMod
                 {
                     var c2 = ComboFromAuto(nm, c.feedUl);
                     if (AddComboUnique(r, c2)) autoComboRaw[c2] = nm;
+                }
+            }
+            // 玩家 2026-11-17：开「多晚」后，更多方案里至少要有一条真正 >=2 晚的方案。
+            // 普通 AutoSolve 的第一条达标解会停在 0/1 晚，所以这里单独搜一条硬性多晚解；
+            // 只放进 r.combos（更多方案池），不改 r.pick 的主方案选择。
+            if (WaterPlan.NightCap > 1 && !forceHydra)
+            {
+                bool hasMulti = false;
+                for (int i = 0; i < r.combos.Count; i++)
+                {
+                    if (r.combos[i] != null && r.combos[i].ok && r.combos[i].nights > 1) { hasMulti = true; break; }
+                }
+                if (hasMulti)
+                {
+                    // 已有真正的多晚方案，不再重复搜。
+                }
+                else
+                {
+                    AutoSolve.Result mn = null;
+                    try
+                    {
+                        if (realWater != null && realWater.v > 0)
+                            mn = AutoSolve.SolveMultiNight(realWater, perf, (double)q, targetBp,
+                                                          WaterPlan.NightCap, 2,
+                                                          allowFilter, allowUv, allowTablet,
+                                                          allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                        else
+                            mn = AutoSolve.SolveMultiNight(c.feedUl, purityBp, perf, (double)q, targetBp,
+                                                          WaterPlan.NightCap, 2,
+                                                          allowFilter, allowUv, allowTablet,
+                                                          allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                    }
+                    catch (Exception) { mn = null; }
+                    if (mn != null && mn.ok && mn.nights > 1 && mn.w != null && mn.w.v > 0
+                        && (!forceHydra || HasAutoTool(mn, "portable")))
+                    {
+                        var c2 = ComboFromAuto(mn, c.feedUl);
+                        if (AddComboUnique(r, c2)) autoComboRaw[c2] = mn;
+                    }
                 }
             }
             autoReportCache[key] = r;
@@ -8064,8 +8111,8 @@ namespace WaterCalcMod
                             if (altsNow == null || altsNow.Count < 2) compareText = "";
                         }
                         if (compareText != null && compareText.Length > 0) stepTxt += "\n" + compareText;
-                        string nightTip = NightUpHintFor(r);
-                        if (nightTip.Length > 0) stepTxt += "\n" + nightTip;
+                        // 多晚不再另挂「升到 N 晚…」的模糊提醒：步骤行已经逐步写出
+                        // 「药/滤棉/净化器/药/净化器」，玩家按步骤就能看懂。
                     }
                     SetT(pMsg, noMachUi ? "" : live);
                     SetVisible(pMsg, !noMachUi && live.Length > 0);
@@ -9774,6 +9821,22 @@ namespace WaterCalcMod
                 if (k != 0) return k;
                 return b.purityBp.CompareTo(a.purityBp);
             });
+            // 玩家 2026-11-17：开多晚时，更多方案第一屏至少能看到一条 >=2 晚方案。
+            // 多晚方案出水通常更少，按出水量排序会沉到第 7 行以后；这里把第一条多晚方案提到最前。
+            if (WaterPlan.NightCap > 1)
+            {
+                int multi = -1;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    if (all[i] != null && all[i].ok && all[i].nights > 1) { multi = i; break; }
+                }
+                if (multi > 0)
+                {
+                    var m = all[multi];
+                    all.RemoveAt(multi);
+                    all.Insert(0, m);
+                }
+            }
             for (int i = 0; i < all.Count && i < max; i++) res.Add(all[i]);
             return res;
         }
@@ -10416,14 +10479,15 @@ namespace WaterCalcMod
                 if (sb.Length > 0) sb.Append(GAP);
                 sb.Append(PlanText.Lbl("紫外"));
             }
-            // 玩家 2026-11-13 定案：1 晚只写「净化器」，2 晚及以上才带数字；
+            // 玩家 2026-11-17：多晚按晚逐个写「净化器」，不再合并成「净化器2晚」。
             // 不用净水器时 nights=0，不强行补成 1 晚。
             if (c.nights > 0)
             {
-                if (sb.Length > 0) sb.Append(GAP);
-                sb.Append(PlanText.Lbl("净化器"));
-                if (c.nights > 1)
-                    sb.Append(PlanText.Rich(PlanText.C_NUM, c.nights.ToString())).Append(PlanText.Lbl("晚"));
+                for (int n = 0; n < c.nights; n++)
+                {
+                    if (sb.Length > 0) sb.Append(GAP);
+                    sb.Append(PlanText.Lbl("净化器"));
+                }
             }
             if (c.tablets > 0)
             {
@@ -10478,17 +10542,11 @@ namespace WaterCalcMod
                 }
                 else if (st.tool == "purifier")
                 {
-                    int j = i + 1;
-                    while (j < raw.rawSteps.Count && raw.rawSteps[j] != null && raw.rawSteps[j].tool == "purifier")
-                    {
-                        count += Math.Max(1, raw.rawSteps[j].count);
-                        j++;
-                    }
-                    i = j - 1;
+                    // 玩家 2026-11-17：多晚不要再合并成「净化器2晚」——按以前格式每一步单独写，
+                    // 这样中间的「药/滤棉」能保留在原位置，读起来就是
+                    // 「药2  滤棉  净化器  药2  净化器」。
                     if (sb.Length > 0) sb.Append(GAP);
                     sb.Append(PlanText.Lbl("净化器"));
-                    if (count > 1)
-                        sb.Append(PlanText.Rich(PlanText.C_NUM, count.ToString())).Append(PlanText.Lbl("晚"));
                 }
                 else
                 {
@@ -10526,12 +10584,14 @@ namespace WaterCalcMod
                 if (sb.Length > 0) sb.Append("  ");
                 sb.Append("紫外");
             }
-            // 与富文本版同一口径：1 晚只写「净化器」，2 晚及以上才带晚数。
+            // 与富文本版同一口径：多晚按晚逐个写「净化器」，不再合并成「净化器2晚」。
             if (c.nights > 0)
             {
-                if (sb.Length > 0) sb.Append("  ");
-                sb.Append("净化器");
-                if (c.nights > 1) sb.Append(c.nights).Append("晚");
+                for (int n = 0; n < c.nights; n++)
+                {
+                    if (sb.Length > 0) sb.Append("  ");
+                    sb.Append("净化器");
+                }
             }
             if (c.tablets > 0)
             {

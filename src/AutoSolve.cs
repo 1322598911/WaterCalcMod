@@ -364,7 +364,22 @@ namespace WaterCalcMod
         {
             if (waterUl <= 0) return null;
             return SolveFrom(Start(waterUl, purityBp), perf, quality, targetBp, nightCap,
-                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax,
+                             hydraDuraMax, 1);
+        }
+
+        /// <summary>强制至少 minNights 晚；用于「开多晚」时给更多方案补一条真正的多晚方案。
+        /// 普通 Solve 会先返回 1 晚解，所以必须单独限制，不能事后把 1 晚方案改写成 2 晚。</summary>
+        public static Result SolveMultiNight(long waterUl, int purityBp, double perf, double quality,
+                                            int targetBp, int nightCap, int minNights,
+                                            bool allowFilter, bool allowUv, bool allowTablet,
+                                            bool allowHydra, int tabletStock, int filterDurMax,
+                                            int hydraDuraMax)
+        {
+            if (waterUl <= 0 || minNights <= 1) return null;
+            return SolveFrom(Start(waterUl, purityBp), perf, quality, targetBp, nightCap,
+                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax,
+                             hydraDuraMax, minNights);
         }
 
         /// <summary>
@@ -383,18 +398,37 @@ namespace WaterCalcMod
             start.w = w;
             start.p = PurityShown(w);
             return SolveFrom(start, perf, quality, targetBp, nightCap,
-                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax,
+                             hydraDuraMax, 1);
+        }
+
+        /// <summary>真实瓶水版：强制至少 minNights 晚。</summary>
+        public static Result SolveMultiNight(WaterMath.Water water0, double perf, double quality,
+                                            int targetBp, int nightCap, int minNights,
+                                            bool allowFilter, bool allowUv, bool allowTablet,
+                                            bool allowHydra, int tabletStock, int filterDurMax,
+                                            int hydraDuraMax)
+        {
+            if (water0 == null || water0.v <= 0 || minNights <= 1) return null;
+            var w = water0.Clone();
+            w.cap = 0;
+            var start = new Node();
+            start.w = w;
+            start.p = PurityShown(w);
+            return SolveFrom(start, perf, quality, targetBp, nightCap,
+                             allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax,
+                             hydraDuraMax, minNights);
         }
 
         private static Result SolveFrom(Node start, double perf, double quality,
                                         int targetBp, int nightCap, bool allowFilter, bool allowUv,
                                         bool allowTablet, bool allowHydra, int tabletStock, int filterDurMax,
-                                        int hydraDuraMax)
+                                        int hydraDuraMax, int minNights)
         {
             bool pureMode = targetBp >= 9990;             // V1 的 good/pure 分档；99.00 走 good
             double capPct = pureMode ? 100.0 : 99.0;
 
-            if (!pureMode && start.p >= 99.0 && TabletCountOk(start))
+            if (minNights <= 1 && !pureMode && start.p >= 99.0 && TabletCountOk(start))
             {
                 var empty = new Result();
                 empty.w = start.w;
@@ -424,6 +458,8 @@ namespace WaterCalcMod
             beam.Add(start);
             Node best = start;
             Node hit = null;
+            Node forcedBest = null;
+            int forcedDepth = -1;
             Node display = null;
             Node zeroNode = null;
             // 玩家 2026-11-16：0 晚（不过净化器）本身也是候选；
@@ -485,31 +521,77 @@ namespace WaterCalcMod
                         display = c;
                 }
 
+                if (minNights > 1)
+                {
+                    // 纯水档（99.90）也走这里，不能只让普通档有强制多晚。
+                    for (int i = 0; i < cands.Count; i++)
+                    {
+                        var mc = cands[i];
+                        if (mc.nights < minNights || mc.w.Purity < targetBp || !TabletCountOk(mc)) continue;
+                        if (forcedBest == null
+                            || mc.nights < forcedBest.nights
+                            || (mc.nights == forcedBest.nights && Better(mc, forcedBest, capPct, pureMode)))
+                        {
+                            forcedBest = mc;
+                            if (forcedDepth < 0) forcedDepth = d;
+                        }
+                    }
+                    if (forcedBest != null && d >= forcedDepth + 3)
+                    {
+                        best = forcedBest;
+                        break;
+                    }
+                }
+
                 if (!pureMode)
                 {
                     var good = new List<Node>();
                     for (int i = 0; i < cands.Count; i++) if (cands[i].p >= 99.0 && TabletCountOk(cands[i])) good.Add(cands[i]);
                     if (good.Count > 0)
                     {
-                        if (hit == null)
+                        if (minNights > 1)
                         {
-                            hit = good[0];
-                            hitDepth = d;
+                            // 多晚档：忽略 1 晚解，单独记录 >= minNights 的最佳节点。
+                            for (int i = 0; i < good.Count; i++)
+                            {
+                                var c = good[i];
+                                if (c.nights < minNights) continue;
+                                if (forcedBest == null
+                                    || c.nights < forcedBest.nights
+                                    || (c.nights == forcedBest.nights && Better(c, forcedBest, capPct, pureMode)))
+                                {
+                                    forcedBest = c;
+                                    if (forcedDepth < 0) forcedDepth = d;
+                                }
+                            }
+                            if (forcedBest != null && d >= forcedDepth + 3)
+                            {
+                                best = forcedBest;
+                                break;
+                            }
                         }
                         else
                         {
-                            // 只找“显示纯度一样”的路线里更省耐久/水更多的
-                            var same = new List<Node>();
-                            for (int i = 0; i < good.Count; i++) if (good[i].p == hit.p) same.Add(good[i]);
-                            if (same.Count > 0 && Better(same[0], hit, capPct, pureMode)) hit = same[0];
-                        }
-                        if (d >= hitDepth + 3)
-                        {
-                            best = hit;
-                            break;
+                            if (hit == null)
+                            {
+                                hit = good[0];
+                                hitDepth = d;
+                            }
+                            else
+                            {
+                                // 只找“显示纯度一样”的路线里更省耐久/水更多的
+                                var same = new List<Node>();
+                                for (int i = 0; i < good.Count; i++) if (good[i].p == hit.p) same.Add(good[i]);
+                                if (same.Count > 0 && Better(same[0], hit, capPct, pureMode)) hit = same[0];
+                            }
+                            if (d >= hitDepth + 3)
+                            {
+                                best = hit;
+                                break;
+                            }
                         }
                     }
-                    else if (hit != null && d >= hitDepth + 3)
+                    else if (minNights <= 1 && hit != null && d >= hitDepth + 3)
                     {
                         best = hit;
                         break;
@@ -529,6 +611,13 @@ namespace WaterCalcMod
                     stagnant++;
                     if (stagnant >= 8) break;
                 }
+            }
+            if (minNights > 1)
+            {
+                if (forcedBest == null) return null;
+                var mr = BuildResult(forcedBest, targetBp);
+                mr.feedUl = start.w.v;
+                return mr;
             }
             if (hit != null) best = hit;
             // 批次 34：达标即停。普通档（目标 99.00 一类）以第一次达标的 hit 为终点，
