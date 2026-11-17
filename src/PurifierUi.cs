@@ -2440,12 +2440,14 @@ namespace WaterCalcMod
         private static GameItem UiPlanBottle()
         {
             if (calcManualSource) return ExplicitPickBottle();
-            // 最硬的一层：方案直接认本帧顶部模型里的那只容器，不再重新挑瓶。
-            if (Model != null && Model.Bottle != null && WaterHelper.GetTotalCapacity(Model.Bottle) > 0)
-                return Model.Bottle;
+            // 方案不能认上一帧的 Model.Bottle：CurrentPlan 会在 BindModel 之前先跑，
+            // 上一帧的模型可能还指着 800 mL 小瓶。这里每次现读当前机器槽，
+            // 与顶部 ComputeBottle() 同一口径；锚点只做空槽兜底。
+            var b = ComputeBottle();
+            if (b != null && WaterHelper.GetTotalCapacity(b) > 0) return b;
             if (uiBottleAnchor != null && WaterHelper.GetTotalCapacity(uiBottleAnchor) > 0)
                 return uiBottleAnchor;
-            return ComputeBottle();
+            return null;
         }
 
         private static string LockVolSig()
@@ -2462,6 +2464,16 @@ namespace WaterCalcMod
 
         private static WaterPlan.Report CurrentPlan(bool full)
         {
+            // 顶部模型已经是空瓶/已经换了容量时，先丢掉旧锁定方案；
+            // 否则 CurrentPlan 会在 BindModel 之前直接返回上一帧的 799.3/4892.6。
+            if (Model != null && Model.HasBottle && lockedReport != null)
+            {
+                if (Model.VolumeMl <= 0)
+                    UnlockPlan("顶部显示空瓶");
+                else if (Model.CapacityMl > 0 && lockedReport.capUl > 0
+                         && Math.Abs(lockedReport.capUl - (long)Model.CapacityMl * 1000L) > 1000L)
+                    UnlockPlan("顶部容器容量变了");
+            }
             // 玩家 2026-11-11：方案只在按档位键 / 改设置页时重算（水量/水质怎么变都不重算）。
             if (LockValid() && (progressActive || !LockNeedsFull(full))) return lockedReport;
             float now = UnityEngine.Time.realtimeSinceStartup;
