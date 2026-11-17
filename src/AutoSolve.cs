@@ -677,15 +677,29 @@ namespace WaterCalcMod
                                         int tabletStock, int filterDurMax, int hydraDuraMax)
         {
             if (capUl <= 0) return null;
+            // 3 L 先按 6 L 的同一套搜索跑一遍；只要最优点没顶到 3 L，
+            // 就直接复用 6 L 的结果，避免两个容器在“都没满”时算出两个数。
+            long requestedCap = capUl;
+            if (capUl < 6000000L)
+            {
+                var broad = SearchFeed(6000000L, purityBp, perf, quality, targetBp, nightCap, mode,
+                                       allowFilter, allowUv, allowTablet, allowHydra, forceHydra,
+                                       tabletStock, filterDurMax, hydraDuraMax);
+                if (broad != null && broad.feedUl <= requestedCap) return broad;
+            }
+            capUl = requestedCap;
             var sw = Stopwatch.StartNew();
             if (mode != 1) mode = 2;
             var grid = new List<long>();
             var all = new List<long>();
             Result best = null;
+            // 小容器（3 L / 6 L）的网格必须用同一个搜索上限，否则 3 L 和 6 L 会在
+            // “都没顶到上限”时因为候选点不同各算一套（玩家 2026-11-18 回归要求）。
+            long gridCap = Math.Max(capUl, 6000000L);
             for (int i = 1; i <= 25; i++)
             {
-                long v = (long)Math.Floor(capUl * Math.Pow(i / 25.0, 2.2));
-                if (v < 1000) continue;
+                long v = (long)Math.Floor(gridCap * Math.Pow(i / 25.0, 2.2));
+                if (v < 1000 || v > capUl) continue;
                 all.Add(v);
                 var r = Solve(v, purityBp, perf, quality, targetBp, nightCap,
                               allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax, hydraDuraMax);
@@ -693,6 +707,15 @@ namespace WaterCalcMod
                 grid.Add(v);
                 if (best == null || Better(r, best, mode, forceHydra))
                     best = r;
+            }
+            // 标准网格不一定落在容量本身；容量也是合法候选（3 L 满装）。
+            if (capUl < gridCap && capUl >= 1000L)
+            {
+                all.Add(capUl);
+                var rCap = Solve(capUl, purityBp, perf, quality, targetBp, nightCap,
+                                 allowFilter, allowUv, allowTablet, allowHydra, tabletStock, filterDurMax, hydraDuraMax);
+                if (Accept(rCap, forceHydra) && (best == null || Better(rCap, best, mode, forceHydra)))
+                    best = rCap;
             }
             if (best == null) { LastSearchMs = (long)sw.ElapsedMilliseconds; return null; }
 

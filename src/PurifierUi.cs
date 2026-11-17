@@ -2525,6 +2525,15 @@ namespace WaterCalcMod
             int targetBp = PlanText.TargetBp(TargetIdx, q);
             long capUl = WaterHelper.GetTotalCapacity(b);
             long volUl = WaterHelper.GetTotalVolume(b);
+            // 方案容量必须和本帧顶部显示的容器一致；不一致说明 b 又抓到了背包里的旧小瓶。
+            if (Model != null && Model.CapacityMl > 0 && Model.Bottle != null
+                && Math.Abs(capUl - (long)Model.CapacityMl * 1000L) > 1000L)
+            {
+                b = Model.Bottle;
+                capUl = WaterHelper.GetTotalCapacity(b);
+                volUl = WaterHelper.GetTotalVolume(b);
+                uiBottleAnchor = b;
+            }
             if (capUl <= 0) capUl = volUl;
             // 玩家 2026-11-18：倒了再按机器会留下上一瓶 2750/4892 的方案。
             // 同一只瓶从「有水」变成 0 时，必须把旧锁定、旧自动缓存、旧瓶锚点一起丢掉，
