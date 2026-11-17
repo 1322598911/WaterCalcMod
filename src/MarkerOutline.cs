@@ -358,18 +358,39 @@ namespace WaterCalcMod
             return n;
         }
 
-        /// <summary>物品在 UI 上的矩形：GameItemElement.rectTransform 取的是物品自己占的格子。</summary>
+        /// <summary>
+        /// 物品在 UI 上的矩形：优先取真正会旋转/翻转的精灵节点。
+        /// GameItemElement.rectTransform 是 middle（未旋转的格子），background 才是 rotator 下的精灵；
+        /// 锚到 middle 时道具转了 90°，框还是横平竖直，这就是玩家反复报的「红框旋转跟不上」。
+        /// </summary>
         private static RectTransform RectOf(object item, out string kind)
         {
             kind = "";
+            RectTransform rt = PartRect(item, "background");
+            if (rt != null) { kind = "sprite:" + rt.name; return rt; }
+            rt = PartRect(item, "rotator");
+            if (rt != null) { kind = "rotator:" + rt.name; return rt; }
             try
             {
-                RectTransform rt = GameBridge.Get(item, "rectTransform") as RectTransform;
+                rt = GameBridge.Get(item, "rectTransform") as RectTransform;
                 if (rt != null) kind = "item:" + rt.name;
                 else kind = "rect-null";
                 return rt;
             }
             catch (Exception e) { kind = "ERRRECT:" + e.GetType().Name; return null; }
+        }
+
+        /// <summary>GameItemElement 的 background / rotator 都是 TreeNodeRender，要再取它的 rectTransform。</summary>
+        private static RectTransform PartRect(object owner, string member)
+        {
+            if (owner == null) return null;
+            try
+            {
+                object part = GameBridge.Get(owner, member);
+                if (part == null) return null;
+                return GameBridge.Get(part, "rectTransform") as RectTransform;
+            }
+            catch (Exception) { return null; }
         }
 
         /// <summary>备选锚点：按 SlotMarker.index 到库存渲染树里反查格子节点（本作取不到时会返回 null）。</summary>

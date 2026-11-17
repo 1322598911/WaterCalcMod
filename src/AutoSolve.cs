@@ -843,16 +843,16 @@ namespace WaterCalcMod
                 if (a.nights != b.nights) return a.nights < b.nights;
                 return a.cost < b.cost;
             }
-            // 性价比：0 晚硬优先；同为 0 晚或多晚时才比每升成本、净赚。
-            // SearchFeed 会按不同接水量比较候选，这里必须也拦住 1 晚方案，
-            // 否则 AutoSolve 内部选了 0 晚，外层搜索仍可能按每升成本换成过夜方案。
+            // 性价比：0 晚硬优先；同为 0 晚或多晚时先比净赚，再比每升成本。
+            // 玩家 2026-11-17：以前每升成本压过净赚，0 药 1.6–1.8L 会赢过 1 药 2.7L，
+            // 结果 3L/6L/20L/50L 容器都推荐不到 2700，更多方案还堆出十几片药的负收益组合。
             if (a.nights == 0 && b.nights > 0) return true;
             if (b.nights == 0 && a.nights > 0) return false;
-            double la = CostPerLiter(a), lb = CostPerLiter(b);
-            if (la != lb) return la < lb;
             double pa = a.revenue - a.cost - (ElectricityPerNight + TimeValuePerNight) * a.nights;
             double pb = b.revenue - b.cost - (ElectricityPerNight + TimeValuePerNight) * b.nights;
             if (pa != pb) return pa > pb;
+            double la = CostPerLiter(a), lb = CostPerLiter(b);
+            if (la != lb) return la < lb;
             if (a.w.v != b.w.v) return a.w.v > b.w.v;
             return a.nights < b.nights;
         }

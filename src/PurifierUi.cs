@@ -3258,6 +3258,9 @@ namespace WaterCalcMod
                             tabletStock, filterDurMax, hydraDuraMax);
                         if (rr == null || !rr.ok || rr.w == null || rr.w.v <= 0) continue;
                         if ((int)Math.Round(rr.purityShown * 100.0) < targetBp) continue;
+                        // 「更多方案」是推荐列表，不是穷举表：负收益、十几片药的组合不往里放。
+                        // 玩家 2026-11-17 报「为什么药片推荐那么多」就是这些扫描组被当成可选推荐了。
+                        if (rr.profit <= 0) continue;
                         if (rr.feedUl > f + 1000L) continue;
                         if (forceHydra && !HasAutoTool(rr, "portable")) continue;
                         string group = rr.tablets + "|" + (HasAutoTool(rr, "filter") ? 1 : 0)
