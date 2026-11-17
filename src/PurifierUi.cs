@@ -2609,33 +2609,9 @@ namespace WaterCalcMod
                                  "|tp" + tapFeedPur + "|mix" + (mixedTopUpNow ? 1 : 0)
                                  + "|full" + (fullReal ? 1 : 0));
 
-            // 玩家 2026-11-16：水源低于 97% 时，模型给的「药 1」常把净化器/过滤后的实际余量估高；
-            // 实测 3000 mL/95.46% 铁锈水 1 药只有 98.95%，2 药才到 99.29。
-            // 玩家 2026-11-17：但 96.70% 这档模型已经能给出 1 药 99.22%，旧阈值 <97% 会把它也强行改成 2 药。
-            // 因此把保守补丁收窄到 <96.00%：高纯度档按模型结果走，低纯度档仍保留 2 药兜底。
-            if (rep != null && rep.pick != null && rep.pick.tablets == 1
-                && PostMode == 0 && ManualPickLabel == null
-                && targetBp >= 9900 && purityBp < 9600)
-            {
-                try
-                {
-                    var rep2 = AutoReport(capUl, purityBp, perf, q, targetBp, Mode,
-                                          reportSearch, reportFeed, reportWater,
-                                          tools != null && tools.filter, tools != null && tools.uv,
-                                          InfiniteTools || ownTab > 0, allowHydra, forceHydra,
-                                          InfiniteTools ? -1 : ownTab,
-                                          InfiniteTools ? int.MaxValue : fDur,
-                                          HydraDuraMaxForSolve(InfiniteTools),
-                                          srcName, GameBridge.NameOfItem(b),
-                                          BottleSig() + (calcManualSource ? "|cm" + CalcManualSig() : "") +
-                                          "|tp" + tapFeedPur + "|mix" + (mixedTopUpNow ? 1 : 0)
-                                          + "|full" + (fullReal ? 1 : 0) + "|two",
-                                          0, 2);
-                    if (rep2 != null && rep2.ok && rep2.pick != null && rep2.pick.tablets >= 2)
-                        rep = rep2;
-                }
-                catch (Exception) { }
-            }
+            // 玩家 2026-11-17：不再按水源纯度阈值强制 2 药。
+            // 1 药是否达标直接由 WaterMath.Tablet / AutoSolve 的药片公式计算；公式说够就按 1 药，
+            // 公式说不够才让搜索继续加药。阈值补丁容易把 96.70% 这种 1 药 99.22% 的可行方案误改成 2 药。
 
             // 满瓶真实水样按整瓶跑不动时，走 BuildFromWater 的真实六项找“倒出多少后能跑”，
             // 不能再用纯度均匀配比的水去搜一个假的可接量。
@@ -3035,7 +3011,7 @@ namespace WaterCalcMod
                                                    bool allowHydra, bool forceHydra,
                                                    int tabletStock, int filterDurMax, int hydraDuraMax,
                                                    string srcName, string bottleName, string bottleSig,
-                                                   int nightLimit = 0, int minTablets = 0)
+                                                   int nightLimit = 0)
         {
             mode = (mode == 1 ? 1 : 2);
             if (capUl <= 0) return null;
@@ -3049,8 +3025,6 @@ namespace WaterCalcMod
             if (PostMode == 1) allowTablet = false;
             int targetTablets = PostMode >= 2 ? PostMode - 1
                                                             : (PostMode == 1 ? 0 : -1);
-            // 低纯度/无真实六项时界面要求至少 2 片：只在自动后置档生效，不覆盖玩家手动固定片数。
-            if (minTablets > 0 && PostMode == 0) targetTablets = minTablets;
             AutoSolve.TabletTarget = targetTablets;
             // 设置页「不用机器」：把净化器/过夜节点从搜索里拿掉，不能只在 WaterPlan 分支里生效。
             AutoSolve.AllowMachine = !WaterPlan.NoMachine;
@@ -3072,7 +3046,7 @@ namespace WaterCalcMod
                          tabletStock + "|" + filterDurMax + "|" +
                          "hyd" + hydraDuraMax + "|" +
                          "sf" + (searchFeed ? 1 : 0) + "|fd" + feedUl + "|" +
-                         "nm" + (WaterPlan.NoMachine ? 1 : 0) + "|mt" + minTablets + "|" +
+                         "nm" + (WaterPlan.NoMachine ? 1 : 0) + "|" +
                          (bottleSig == null ? "-" : bottleSig);
             // 缓存按完整 key 命中：不能只认“上一次 autoReportKey”，否则效率/性价比来回切
             // 时旧档 key 明明在字典里也会重新求 8 轮，造成切模式卡顿。
