@@ -2404,10 +2404,24 @@ namespace WaterCalcMod
         /// 2026-11-17：PlanBottle 在机器窗焦点/配对切换时会拿到背包里另一只 750/800 mL 小瓶，
         /// 导致 6L 显示 6000、方案却按 800 搜；3L/6L 切换时旧方案还会被小瓶容量锁住。
         /// </summary>
-        private static GameItem UiPlanBottle()
+        private static GameItem uiBottleAnchor;
+
+        /// <summary>顶部显示用的瓶：每次 Compute 都重新取，并把对象锚定给方案/缓存/锁定。</summary>
+        private static GameItem ComputeBottle()
         {
             var b = calcManualSource ? ExplicitPickBottle() : GameBottle();
-            return b != null ? b : PlanBottle();
+            if (b == null) b = PlanBottle();
+            uiBottleAnchor = b;
+            return b;
+        }
+
+        /// <summary>方案只认顶部刚显示的那只瓶，避免同一帧里 MachineOpen 变化导致方案换瓶。</summary>
+        private static GameItem UiPlanBottle()
+        {
+            if (calcManualSource) return ExplicitPickBottle();
+            if (uiBottleAnchor != null && WaterHelper.GetTotalCapacity(uiBottleAnchor) > 0)
+                return uiBottleAnchor;
+            return ComputeBottle();
         }
 
         private static string LockVolSig()
@@ -14174,7 +14188,7 @@ GameItem lastSrc = null;
             m.Mode = Mode; m.PreMode = PreMode; m.PostMode = PostMode;
             // 右键读取后设置页切到手动源：主页的容器/水质也要显示这只读取瓶，
             // 不能还拿当前机器瓶，导致主页和计算页各算一套。
-            var b = UiPlanBottle();
+            var b = ComputeBottle();
             m.HasBottle = b != null;
             if (b != null)
             {
