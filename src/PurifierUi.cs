@@ -2526,6 +2526,18 @@ namespace WaterCalcMod
             long capUl = WaterHelper.GetTotalCapacity(b);
             long volUl = WaterHelper.GetTotalVolume(b);
             if (capUl <= 0) capUl = volUl;
+            // 玩家 2026-11-18：倒了再按机器会留下上一瓶 2750/4892 的方案。
+            // 同一只瓶从「有水」变成 0 时，必须把旧锁定、旧自动缓存、旧瓶锚点一起丢掉，
+            // 否则空瓶会继续按上一份水样出 799.3/4892.6。
+            if (volUl <= 0L && lastPlanVolUl > 0L)
+            {
+                autoReportKey = "";
+                autoReportCache.Clear();
+                lastMachineBottle = null;
+                UnlockPlan("容器已倒空，清空旧方案缓存");
+                uiBottleAnchor = b;
+            }
+            lastPlanVolUl = volUl;
             // 空瓶不可能处于“接水后固定按现有水算”的状态：清掉上次残留的临时标记。
             if (volUl <= 0L && postFillFix) { postFillFix = false; postFillSig = ""; }
             // 接水后如果六项变了，只按实际这瓶水算，不再继续搜下一段接水量。
@@ -6421,6 +6433,7 @@ namespace WaterCalcMod
         // 重锁成当前 2909/98.04 的新方案（先补91+药2）。这里记住上一次真正读到的
         // 机器瓶，只有换了一只瓶才解锁；同一只瓶开关窗口不动方案。
         private static GameItem lastMachineBottle;
+        private static long lastPlanVolUl = -1L;
         private static MachinerySlider sCalcWater;
         private static readonly System.Collections.Generic.List<WaterPlan.WaterBottle> calcWaters =
             new System.Collections.Generic.List<WaterPlan.WaterBottle>();
