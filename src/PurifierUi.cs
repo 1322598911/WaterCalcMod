@@ -1604,7 +1604,7 @@ namespace WaterCalcMod
             long vol = 0L; int bp = 0; long cap = 0L;
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) return false;
                 vol = WaterHelper.GetTotalVolume(b);
                 bp = WaterHelper.GetWaterPurity(b);
@@ -1640,7 +1640,7 @@ namespace WaterCalcMod
                 progressTabletUsed = 0;
                 try
                 {
-                    var b = PlanBottle();
+                    var b = UiPlanBottle();
                     if (b != null)
                     {
                         lockedVolUl = WaterHelper.GetTotalVolume(b);
@@ -1678,7 +1678,7 @@ namespace WaterCalcMod
                 // 锁方案时记录的必须是这份方案实际对应的瓶，不能先抓鼠标上下文里的瓶。
                 // 接水/倒水时光标可能停在别的水源瓶，旧版先取 CtxBottle 会把 lockedVolUl
                 // 记成另一瓶，放药后 TabletProgressFromStart 看到“水量反而变多”，永远认不出进度。
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) b = CtxBottle();
                 if (b == null) b = GameBottle();
                 if (b != null)
@@ -1815,7 +1815,7 @@ namespace WaterCalcMod
             {
                 // 玩家 2026-11-16：先倒到别的容器时 CtxBottle 会切到别的瓶，
                 // 按它判起手量会把方案解成另一套（P3）。锁方案只认当前机器瓶。
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) return false;
                 vol = WaterHelper.GetTotalVolume(b);
                 bp = WaterHelper.GetWaterPurity(b);
@@ -1969,7 +1969,7 @@ namespace WaterCalcMod
             long capNow = 0L, volNow = 0L;
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b != null)
                 {
                     capNow = WaterHelper.GetTotalCapacity(b);
@@ -2202,7 +2202,7 @@ namespace WaterCalcMod
             long vol = 0L; int bp = 0;
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) b = lastMachineBottle;
                 if (b == null) return 0;
                 vol = WaterHelper.GetTotalVolume(b);
@@ -2366,7 +2366,7 @@ namespace WaterCalcMod
         {
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) return "-";
                 return WaterHelper.GetTotalVolume(b) + "@" + WaterHelper.GetWaterPurity(b) + "/" + WaterHelper.GetTotalCapacity(b);
             }
@@ -2398,11 +2398,23 @@ namespace WaterCalcMod
             return PickFallbackBottle();
         }
 
+        /// <summary>
+        /// 主页显示、方案计算、缓存签名、方案锁定统一用这只瓶：
+        /// 正常走 GameBottle（就是顶部 0/6000 的来源），只有右键读取/手填源才用 ExplicitPickBottle。
+        /// 2026-11-17：PlanBottle 在机器窗焦点/配对切换时会拿到背包里另一只 750/800 mL 小瓶，
+        /// 导致 6L 显示 6000、方案却按 800 搜；3L/6L 切换时旧方案还会被小瓶容量锁住。
+        /// </summary>
+        private static GameItem UiPlanBottle()
+        {
+            var b = calcManualSource ? ExplicitPickBottle() : GameBottle();
+            return b != null ? b : PlanBottle();
+        }
+
         private static string LockVolSig()
         {
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b == null) return "-";
                 return WaterHelper.GetTotalVolume(b) + "@" + WaterHelper.GetWaterPurity(b) +
                        "/" + WaterHelper.GetTotalCapacity(b);
@@ -2448,12 +2460,10 @@ namespace WaterCalcMod
         {
             // 手动源（右键读取/设置页手填）时，主页容器行和方案都必须用这只样瓶，
             // 不能再用当前机器瓶；否则主页是机器容量、计算页是读取容量。
-            // 玩家 2026-11-17：主页顶部的 0/6000 来自 Compute() 的 GameBottle()，
-            // 但方案这里原来先走 PlanBottle()，会拿到另一只 750/800 mL 小瓶，于是
-            // 6L 空瓶只搜出 799.3 / 750。方案必须和顶部显示同一只容器；
-            // 只有右键读取/手填源时才用 ExplicitPickBottle()。
-            var b = calcManualSource ? ExplicitPickBottle() : GameBottle();
-            if (b == null) b = PlanBottle();
+            // 玩家 2026-11-17：主页顶部 0/6000 来自 Compute() 的 GameBottle()，
+            // 方案/缓存/锁也必须用同一只瓶，否则 6L 会按背包里的 750/800 mL 小瓶搜出 799.3，
+            // 换 3L 时旧方案还会被小瓶容量锁住。手动源才用 ExplicitPickBottle()。
+            var b = UiPlanBottle();
 #if DEV
             try
             {
@@ -7399,7 +7409,7 @@ namespace WaterCalcMod
             var sb = new System.Text.StringBuilder(64);
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b != null)
                 {
                     sb.Append(WaterHelper.GetTotalVolume(b)).Append('/').Append(WaterHelper.GetTotalCapacity(b))
@@ -9629,7 +9639,7 @@ namespace WaterCalcMod
             long vol = 0L;
             try
             {
-                var b = PlanBottle();
+                var b = UiPlanBottle();
                 if (b != null) vol = WaterHelper.GetTotalVolume(b);
             }
             catch (Exception) { vol = 0L; }
@@ -14164,8 +14174,7 @@ GameItem lastSrc = null;
             m.Mode = Mode; m.PreMode = PreMode; m.PostMode = PostMode;
             // 右键读取后设置页切到手动源：主页的容器/水质也要显示这只读取瓶，
             // 不能还拿当前机器瓶，导致主页和计算页各算一套。
-            var b = calcManualSource ? ExplicitPickBottle() : null;
-            if (b == null) b = GameBottle();
+            var b = UiPlanBottle();
             m.HasBottle = b != null;
             if (b != null)
             {
