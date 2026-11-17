@@ -16,6 +16,7 @@ namespace WaterCalcMod
     public static class MarkerOutline
     {
         public const string NodeName = "WaterCalc_MarkerOutline";
+        private const string GridAnchorName = "WaterCalc_GridAnchor";
 
         private const float EdgeThickness = 2f;    // 描边宽度（UI 单位；1080p 画布 scaleFactor=2，约 4 屏幕像素）
 
@@ -359,14 +360,17 @@ namespace WaterCalcMod
         }
 
         /// <summary>
-        /// 物品在 UI 上的矩形：优先取真正会旋转/翻转的精灵节点。
-        /// GameItemElement.rectTransform 是 middle（未旋转的格子），background 才是 rotator 下的精灵；
-        /// 锚到 middle 时道具转了 90°，框还是横平竖直，这就是玩家反复报的「红框旋转跟不上」。
+        /// 物品在 UI 上的矩形：按它实际占用的格子算，不再跟着 background 精灵转。
+        /// 玩家 2026-11-17：道具一旋转，框就歪；精灵节点带 rotator 的 90° 旋转，框跟着转反而
+        /// 跟格子对不上。这里用 GameItemElement.modifiedShape 的 minX/minY/globalWidth/globalHeight
+        /// 在 handler 上铺一个“占格锚点”，框只认格子，不看精灵朝向。
         /// </summary>
         private static RectTransform RectOf(object item, out string kind)
         {
-            kind = "";
-            RectTransform rt = PartRect(item, "background");
+            RectTransform rt = GridRect(item, out kind);
+            if (rt != null) return rt;
+            // 拿不到 modifiedShape 时才退回精灵节点；这是最后兜底，不是主路径。
+            rt = PartRect(item, "background");
             if (rt != null) { kind = "sprite:" + rt.name; return rt; }
             rt = PartRect(item, "rotator");
             if (rt != null) { kind = "rotator:" + rt.name; return rt; }
@@ -378,6 +382,67 @@ namespace WaterCalcMod
                 return rt;
             }
             catch (Exception e) { kind = "ERRRECT:" + e.GetType().Name; return null; }
+        }
+
+        /// <summary>
+        /// 用物品实际占格铺一个 RectTransform：modifiedShape.globalWidth/Height 已含旋转，
+        /// minX/minY 是它在库存格里的左上原点，handler 与 middle 同一套格子坐标系。
+        /// </summary>
+        private static RectTransform GridRect(object item, out string kind)
+        {
+            kind = "";
+            try
+            {
+                object handler = GameBridge.Get(item, "handler");
+                RectTransform parent = PartRect(handler, "rectTransform");
+                if (parent == null) { kind = "no-handler"; return null; }
+                object shape = GameBridge.Get(item, "modifiedShape");
+                if (shape == null) { kind = "no-shape"; return null; }
+                int w = IntVal(shape, "width"), h = IntVal(shape, "height");
+                int gw = IntVal(shape, "globalWidth"), gh = IntVal(shape, "globalHeight");
+                int minX = IntVal(shape, "minX"), minY = IntVal(shape, "minY");
+                if (w <= 0 || h <= 0 || gw <= 0 || gh <= 0) { kind = "shape0"; return null; }
+                RectTransform mid = PartRect(item, "middle");
+                if (mid == null) { kind = "no-middle"; return null; }
+                // 反编译 ValidateSelectLocked：middle.sizeDelta = modifiedShape.width/height * gridSize。
+                int grid = Mathf.RoundToInt(mid.rect.width / w);
+                if (grid <= 0) grid = Mathf.RoundToInt(mid.sizeDelta.x / w);
+                if (grid <= 0) { kind = "no-grid"; return null; }
+
+                Transform old = parent.Find(GridAnchorName);
+                RectTransform rt;
+                if (old != null && old is RectTransform)
+                {
+                    rt = (RectTransform)old;
+                }
+                else
+                {
+                    GameObject go = new GameObject(GridAnchorName);
+                    go.layer = parent.gameObject.layer;
+                    rt = go.AddComponent<RectTransform>();
+                    rt.SetParent(parent, false);
+                }
+                rt.anchorMin = new Vector2(0f, 1f);
+                rt.anchorMax = new Vector2(0f, 1f);
+                rt.pivot = new Vector2(0f, 1f);
+                rt.sizeDelta = new Vector2(gw * grid, gh * grid);
+                rt.anchoredPosition = new Vector2(minX * grid, -minY * grid);
+                rt.localRotation = Quaternion.identity;
+                rt.localScale = Vector3.one;
+                kind = "grid:" + gw + "x" + gh + "@" + minX + "," + minY;
+                return rt;
+            }
+            catch (Exception e) { kind = "ERRGRID:" + e.GetType().Name; return null; }
+        }
+
+        private static int IntVal(object owner, string member)
+        {
+            try
+            {
+                object v = GameBridge.Get(owner, member);
+                return v is int ? (int)v : 0;
+            }
+            catch (Exception) { return 0; }
         }
 
         /// <summary>GameItemElement 的 background / rotator 都是 TreeNodeRender，要再取它的 rectTransform。</summary>
