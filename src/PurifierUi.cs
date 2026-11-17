@@ -2448,7 +2448,11 @@ namespace WaterCalcMod
         {
             // 手动源（右键读取/设置页手填）时，主页容器行和方案都必须用这只样瓶，
             // 不能再用当前机器瓶；否则主页是机器容量、计算页是读取容量。
-            var b = calcManualSource ? ExplicitPickBottle() : null;
+            // 玩家 2026-11-17：主页顶部的 0/6000 来自 Compute() 的 GameBottle()，
+            // 但方案这里原来先走 PlanBottle()，会拿到另一只 750/800 mL 小瓶，于是
+            // 6L 空瓶只搜出 799.3 / 750。方案必须和顶部显示同一只容器；
+            // 只有右键读取/手填源时才用 ExplicitPickBottle()。
+            var b = calcManualSource ? ExplicitPickBottle() : GameBottle();
             if (b == null) b = PlanBottle();
 #if DEV
             try
