@@ -2474,6 +2474,13 @@ namespace WaterCalcMod
             long capUl = WaterHelper.GetTotalCapacity(b);
             long volUl = WaterHelper.GetTotalVolume(b);
             if (capUl <= 0) capUl = volUl;
+            // 玩家 2026-11-17：空瓶时不能只看选中这只瓶。背包里还有 50 mL 量筒时，
+            // 理论上限是 3000+50=3050；按整包容器容量搜接水量，才会给出 2750 这类可执行量。
+            if (volUl <= 0L && !calcManualSource)
+            {
+                long allCapUl = TotalContainerCapacityUl();
+                if (allCapUl > capUl) capUl = allCapUl;
+            }
             // 空瓶不可能处于“接水后固定按现有水算”的状态：清掉上次残留的临时标记。
             if (volUl <= 0L && postFillFix) { postFillFix = false; postFillSig = ""; }
             // 接水后如果六项变了，只按实际这瓶水算，不再继续搜下一段接水量。
@@ -2487,16 +2494,11 @@ namespace WaterCalcMod
                 || (volUl > 0L && capUl > 0L && capUl - volUl > 1500L);
             int srcGrade = 0, tapPur = 0;
             try { TodaySource(out srcGrade, out tapPur); } catch (Exception) { tapPur = 0; }
-            // 空瓶时以主页已经显示出来的水源为准：自动档现场读失败/读成另一只时，
-            // 不能让「上面写着沟渠 86.54，方案却空」继续出现。
-            if (volUl <= 0L && Model != null && Model.SourcePurBp > 0)
-            {
-                tapPur = Model.SourcePurBp;
-                // 玩家 2026-11-17：只认当前读到的纯度，不能沿用 Model 里上一次的水源档位。
-                // 以前这里保留 srcGrade=4/5，读到沟渠 86.54 时仍按铁锈档算，自动就变成「铁锈未解锁」。
-                srcGrade = TapPurLooksValid(5, tapPur) ? 5
-                         : (TapPurLooksValid(4, tapPur) ? 4 : 0);
-            }
+            // 玩家 2026-11-17：切到下一台机器后，Model 还是上一台的缓存；旧版在这里用
+            // Model.SourcePurBp 覆盖 TodaySource，结果第一台正确、后面被锁在上一台的铁锈水。
+            // 这里只认当次 TodaySource/TapSource 读到的今日水管真值；读不到就让玩家手动选。
+            if (volUl <= 0L && tapPur <= 0)
+                LastMsg = "没读到今日水管水质，请在设置里手动选水源";
             // 补进容器的水来自水龙头，不能拿瓶里现成水的纯度去补。
             // 手动源（右键读取）尤其明显：2 L 幽灵水 + 48 L 铁锈水会混成另一种水。
             int tapFeedGrade = 0, tapFeedPur = 0;
@@ -7953,7 +7955,12 @@ namespace WaterCalcMod
                 // 这里只往右列写值；上限跟着水质走（上限是水质能达到的上限，摆一行更符合读表习惯）。
                 if (pSubLbl != null) SetT(pSubLbl, "容器");
                 if (pSub != null)
-                    SetT(pSub, PlanText.Rich(PlanText.C_NUM, m.VolumeMl + "/" + m.CapacityMl + " mL"));
+                {
+                    string capText = m.VolumeMl + "/" + m.CapacityMl + " mL";
+                    if (m.TheoreticalCapacityMl > m.CapacityMl)
+                        capText += "  理论 " + m.TheoreticalCapacityMl + " mL";
+                    SetT(pSub, PlanText.Rich(PlanText.C_NUM, capText));
+                }
                 // 玩家 2026-11-13：不管瓶里有没有水，这一行都叫「水源」（他要把「今日水」统一成「水源」）——
                 // 空瓶报水龙头今天这桶水，有瓶报瓶里这瓶水的来源，读起来都是「水源」。
                 if (pPurLbl != null) SetT(pPurLbl, "水源");
@@ -9577,6 +9584,26 @@ namespace WaterCalcMod
             }
             if (best != null) Log("[fill] fallback bottle cap=" + (bestCap / 1000) + "mL");
             return best;
+        }
+
+        /// <summary>背包/机器里所有可接水容器的容量合计；净水器一局最多按 10 L 算。
+        /// 玩家 2026-11-17：3000 mL 瓶 + 50 mL 量筒，理论上限应显示 3050，不能只看选中那只瓶。</summary>
+        private static long TotalContainerCapacityUl()
+        {
+            long sum = 0L;
+            try
+            {
+                var all = GameBridge.LiveAllItems();
+                for (int i = 0; i < all.Count; i++)
+                {
+                    if (all[i] == null) continue;
+                    long c = WaterHelper.GetTotalCapacity(all[i]);
+                    if (c > 0L) sum += c;
+                    if (sum >= 10000000L) return 10000000L;
+                }
+            }
+            catch (Exception) { return 0L; }
+            return Math.Min(10000000L, sum);
         }
 
         /// <summary>有水的容器里挑装得最多的一个 —— 「按现有水/混水算方案」要看这一瓶，不是看空瓶。</summary>
@@ -14163,6 +14190,7 @@ GameItem lastSrc = null;
                 // 20 L 罐实测 19,999,998 µL（差 2 µL），整数截断会显示成 19999 —— 按四舍五入取整（m00160）
                 m.VolumeMl = (int)((WaterHelper.GetTotalVolume(b) + 999L) / 1000L);
                 m.CapacityMl = (int)((WaterHelper.GetTotalCapacity(b) + 999L) / 1000L);
+                m.TheoreticalCapacityMl = (int)((TotalContainerCapacityUl() + 999L) / 1000L);
                 m.PurityBp = calcManualSource ? CalcManualPurityBp() : WaterHelper.GetWaterPurity(b);
                 if (m.PurityBp <= 0)
                 {

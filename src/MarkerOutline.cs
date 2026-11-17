@@ -17,7 +17,7 @@ namespace WaterCalcMod
     {
         public const string NodeName = "WaterCalc_MarkerOutline";
 
-        private const float EdgeThickness = 1.5f;   // 描边宽度（UI 单位；1080p 画布 scaleFactor=2，约 3 屏幕像素）
+        private const float EdgeThickness = 2f;    // 描边宽度（UI 单位；1080p 画布 scaleFactor=2，约 4 屏幕像素）
 
         private static ManualLogSource log;
         private static readonly List<Entry> entries = new List<Entry>();
@@ -146,8 +146,8 @@ namespace WaterCalcMod
                 rt.anchorMin = Vector2.zero;
                 rt.anchorMax = Vector2.one;
                 rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.offsetMin = Vector2.zero;
-                rt.offsetMax = Vector2.zero;
+                rt.offsetMin = new Vector2(-2f, -2f);
+                rt.offsetMax = new Vector2(2f, 2f);
                 rt.localRotation = Quaternion.identity;
                 rt.localScale = Vector3.one;
 
@@ -243,25 +243,9 @@ namespace WaterCalcMod
         /// <summary>高亮框的红色：优先取游戏调色板里的 Red（GetColorFromPalette），取不到再退回同色系常量。</summary>
         private static Color MarkerRed()
         {
-            try
-            {
-                Color c = RenderHandler.GetColorFromPalette(RenderHandler.ColorPalette.Red);
-                if (c.a < 0.01f) c.a = 1f;      // 调色板里偶有 alpha=0，铺上去等于全透明（玩家报「框有了但没红色」）
-                return c;
-            }
-            catch (Exception) { }
-            try
-            {
-                RenderHandler cur = RenderHandler.current;
-                if (cur != null)
-                {
-                    Color c = cur.textColorRed;
-                    if (c.a < 0.01f) c.a = 1f;
-                    return c;
-                }
-            }
-            catch (Exception) { }
-            return new Color(0.85f, 0.13f, 0.13f, 1f);
+            // 玩家 2026-11-17：调色板 Red 在某些场景发暗，框看起来“不够红”。
+            // 高亮框是提示层，不参与游戏配色，直接用高亮红；alpha 必须为 1。
+            return new Color(1f, 0.12f, 0.12f, 1f);
         }
 
         /// <summary>
