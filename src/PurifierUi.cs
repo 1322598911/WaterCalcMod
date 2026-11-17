@@ -2406,11 +2406,32 @@ namespace WaterCalcMod
         /// </summary>
         private static GameItem uiBottleAnchor;
 
+        /// <summary>只读「选中机器储水槽」里的真实 Container + 液体，不先掉到背包/别的机器。
+        /// 2026-11-18：玩家要求方案读机器内的容器和溶液；SelectedMachineBottle 走
+        /// SelectedPairForRead().BottleInv，ActiveMachineBottle 走 ActivePair().BottleInv，
+        /// 再由 BottleInMachineSlot 读 childItem / ItemsOf 找容器。</summary>
+        private static GameItem MachineSlotBottle()
+        {
+            var selected = SelectedMachineBottle();
+            if (selected != null) return selected;
+            return ActiveMachineBottle();
+        }
+
         /// <summary>顶部显示用的瓶：每次 Compute 都重新取，并把对象锚定给方案/缓存/锁定。</summary>
         private static GameItem ComputeBottle()
         {
-            var b = calcManualSource ? ExplicitPickBottle() : GameBottle();
-            if (b == null) b = PlanBottle();
+            GameItem b;
+            if (calcManualSource)
+            {
+                b = ExplicitPickBottle();
+            }
+            else
+            {
+                // 先读选中机器槽；槽为空/读不到才用 GameBottle/PlanBottle 兜底。
+                b = MachineSlotBottle();
+                if (b == null) b = GameBottle();
+                if (b == null) b = PlanBottle();
+            }
             uiBottleAnchor = b;
             return b;
         }
