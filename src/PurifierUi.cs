@@ -2440,6 +2440,9 @@ namespace WaterCalcMod
         private static GameItem UiPlanBottle()
         {
             if (calcManualSource) return ExplicitPickBottle();
+            // 最硬的一层：方案直接认本帧顶部模型里的那只容器，不再重新挑瓶。
+            if (Model != null && Model.Bottle != null && WaterHelper.GetTotalCapacity(Model.Bottle) > 0)
+                return Model.Bottle;
             if (uiBottleAnchor != null && WaterHelper.GetTotalCapacity(uiBottleAnchor) > 0)
                 return uiBottleAnchor;
             return ComputeBottle();
@@ -14210,6 +14213,7 @@ GameItem lastSrc = null;
             // 右键读取后设置页切到手动源：主页的容器/水质也要显示这只读取瓶，
             // 不能还拿当前机器瓶，导致主页和计算页各算一套。
             var b = ComputeBottle();
+            m.Bottle = b;
             m.HasBottle = b != null;
             if (b != null)
             {

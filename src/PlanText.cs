@@ -187,6 +187,7 @@ namespace WaterCalcMod
     public class PanelModel
     {
         public bool HasBottle;
+        public GameItem Bottle;          // 本帧顶部实际显示的容器；方案/缓存/锁定都锚定它
         public string BottleName = "";
         public int VolumeMl;
         public int CapacityMl;
