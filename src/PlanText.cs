@@ -190,7 +190,6 @@ namespace WaterCalcMod
         public string BottleName = "";
         public int VolumeMl;
         public int CapacityMl;
-        public int TheoreticalCapacityMl;   // 背包+机器里所有可接水容器的容量合计（用于“理论最高上限”）
         public int PurityBp;
         public int CapBp;
         public int PerfPct;
